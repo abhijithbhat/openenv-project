@@ -1,0 +1,80 @@
+spec_version: 1
+name: email-triage-env
+version: "1.0.0"
+description: >
+  Real-world customer support email triage environment.
+  An AI agent classifies incoming customer emails into one of five routing
+  categories: billing, technical, general, refund, or complaint.
+  Tasks range from easy (single-intent emails) to hard (multi-intent,
+  escalated emails) with partial-credit reward signals.
+
+author: "Hackathon Team"
+license: MIT
+
+# Server configuration (FastAPI via uvicorn)
+app: server:app
+port: 7860
+runtime: python
+
+# Action space
+action_space:
+  type: categorical
+  values:
+    - billing
+    - technical
+    - general
+    - refund
+    - complaint
+
+# Observation space
+observation_space:
+  type: dict
+  fields:
+    email_id:             { type: string, description: "Unique email ID" }
+    subject:              { type: string, description: "Email subject line" }
+    body:                 { type: string, description: "Email body text" }
+    task_name:            { type: string, description: "Active task name" }
+    step:                 { type: integer, description: "Current step (1-based)" }
+    max_steps:            { type: integer, description: "Total emails in episode" }
+    available_categories: { type: array,   description: "Valid action values" }
+
+# Three tasks with difficulty progression (easy → medium → hard)
+tasks:
+  - name: easy_triage
+    difficulty: easy
+    description: >
+      5 simple, single-intent customer support emails.
+      Binary scoring: 1.0 for correct label, 0.0 otherwise.
+    n_emails: 5
+    score_range: [0.0, 1.0]
+
+  - name: medium_triage
+    difficulty: medium
+    description: >
+      5 emails with a primary and a secondary valid label.
+      Partial-credit scoring: 1.0 primary, 0.5 secondary, 0.0 wrong.
+    n_emails: 5
+    score_range: [0.0, 1.0]
+
+  - name: hard_triage
+    difficulty: hard
+    description: >
+      5 complex, multi-intent, or escalated emails.
+      Escalation-aware scoring: 1.0 primary, 0.4 secondary,
+      0.2 complaint-detection credit, 0.0 wrong.
+    n_emails: 5
+    score_range: [0.0, 1.0]
+
+# Reward design
+reward:
+  type: shaped
+  range: [0.0, 1.0]
+  description: >
+    Per-step reward based on classification accuracy.
+    Partial progress signals are provided for medium and hard tasks.
+    No penalties for action re-tries (noop-equivalent = returning 'general').
+
+# Episode boundaries
+episode:
+  max_steps: 5
+  termination: "All emails in the task have been classified."
