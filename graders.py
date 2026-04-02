@@ -26,17 +26,17 @@ from typing import List, Optional
 EASY_EMAILS: List[dict] = [
     {
         "email_id": "e001",
-        "subject": "Payment Failed",
-        "body": "Hi, my credit card payment was declined when I tried to renew. "
-                "Please help me fix this.",
+        "subject": "my payment has failed",
+        "body": "hello, my credit card payment was declined when I tried to renew it. "
+                "please fix this help me",
         "label": "billing",
         "secondary": None,
     },
     {
         "email_id": "e002",
-        "subject": "App Keeps Crashing",
+        "subject": "App Keeps Crashing every time",
         "body": "The mobile application crashes every time I open the dashboard. "
-                "I've tried reinstalling but the problem persists.",
+                "I have tried reinstalling, but the problem occurs each and every time",
         "label": "technical",
         "secondary": None,
     },
@@ -51,7 +51,7 @@ EASY_EMAILS: List[dict] = [
     {
         "email_id": "e004",
         "subject": "Wrong Invoice Amount",
-        "body": "I was charged $200 but I selected the $99 plan. "
+        "body": "I was charged $200, but I chose the plan of $99. "
                 "Please correct my invoice.",
         "label": "billing",
         "secondary": None,
@@ -59,7 +59,7 @@ EASY_EMAILS: List[dict] = [
     {
         "email_id": "e005",
         "subject": "Login Not Working",
-        "body": "I cannot log into my account. It keeps saying incorrect "
+        "body": "I cannot login into my account. It always keeps saying incorrect "
                 "password even though I just reset it.",
         "label": "technical",
         "secondary": None,
@@ -69,45 +69,45 @@ EASY_EMAILS: List[dict] = [
 MEDIUM_EMAILS: List[dict] = [
     {
         "email_id": "m001",
-        "subject": "Payment Failed – Possible Bug?",
-        "body": "My payment failed again. I suspect it's a bug in your checkout "
-                "system because my card is definitely valid. Can you look into both "
-                "the charge issue and the technical bug?",
+        "subject": "Payment failing again — is it a bug?",
+        "body": "Hi,\n\nMy payment has failed again. My card is 100% valid so I think "
+                "there might be some bug in your payment system.\n\nCan you check "
+                "both the billing side and whether there is a technical issue causing this?",
         "label": "billing",
         "secondary": "technical",
     },
     {
         "email_id": "m002",
-        "subject": "App Crash During Billing Update",
-        "body": "Whenever I try to update my credit card details, the app crashes "
-                "immediately. I'm worried the payment went through but the card "
-                "wasn't saved. Please investigate.",
+        "subject": "App crashes when updating card details",
+        "body": "Hello,\n\nEvery time I try to update my credit card in the app, it "
+                "crashes immediately.\n\nI am not sure if my payment went through or "
+                "not since the card was not saved. Please check this for me.",
         "label": "technical",
         "secondary": "billing",
     },
     {
         "email_id": "m003",
-        "subject": "Cancel and Refund Request",
-        "body": "I want to cancel my subscription immediately and receive a full "
-                "refund. The product didn't meet the promises made during the sales "
-                "call. I'm very unhappy with the experience.",
+        "subject": "I want to cancel and get a refund",
+        "body": "Hi,\n\nI would like to cancel my subscription right away and get a "
+                "full refund. The product was not what was promised during the sales call. "
+                "I am really not happy with the experience overall.",
         "label": "refund",
         "secondary": "complaint",
     },
     {
         "email_id": "m004",
-        "subject": "Slow Dashboard",
-        "body": "The web dashboard is extremely slow and times out when I try to "
-                "view my account balance and billing history. Is this a known issue?",
+        "subject": "Dashboard is very slow",
+        "body": "The dashboard keeps timing out whenever I try to check my account "
+                "balance or see my billing history. Is this something you are aware of?",
         "label": "technical",
         "secondary": "general",
     },
     {
         "email_id": "m005",
-        "subject": "Broken Invoicing Feature + Feature Request",
-        "body": "The CSV export of invoices is broken — it produces empty files. "
-                "Also, could you add a dark mode to the dashboard? Both would "
-                "be very helpful.",
+        "subject": "Invoice export not working + one suggestion",
+        "body": "Hi team,\n\nThe invoice CSV export is broken — it keeps downloading "
+                "an empty file.\n\nAlso, small suggestion: it would be great if you "
+                "could add a dark mode to the dashboard. Would really help.",
         "label": "technical",
         "secondary": "general",
     },
@@ -116,53 +116,59 @@ MEDIUM_EMAILS: List[dict] = [
 HARD_EMAILS: List[dict] = [
     {
         "email_id": "h001",
-        "subject": "Multiple Failures – Escalation",
-        "body": "I have been charged twice this month, the app crashed when I tried "
-                "to raise a dispute, and your support team hasn't responded in two "
-                "weeks. I want an immediate refund and I am considering contacting "
-                "my bank and filing a formal complaint.",
+        "subject": "Charged twice & no response",
+        "body": "Hi,\n\nI just noticed I've been charged twice this month. I tried "
+                "raising a dispute in the app but it crashed midway. I've also "
+                "reached out to support earlier but haven't heard back for almost "
+                "2 weeks now.\n\nThis is really frustrating. I need a refund ASAP, "
+                "otherwise I'll have to contact my bank and take this further.\n\nThanks.",
         "label": "complaint",
         "secondary": "billing",
     },
     {
         "email_id": "h002",
-        "subject": "Balance Mismatch – Third Time Writing",
-        "body": "This is the third time I'm writing about the same issue. My account "
-                "balance doesn't match my bank statement. The mobile app throws a "
-                "500 error when I try to reconcile. I need this resolved today or "
-                "I will file a chargeback.",
+        "subject": "Still facing balance mismatch",
+        "body": "Hello,\n\nThis is actually the third time I'm writing about this. "
+                "My account balance just doesn't match what's shown in my bank "
+                "statement.\n\nWhenever I try to check it in the app, I keep getting "
+                "a 500 error which makes it impossible to verify anything.\n\nPlease "
+                "look into this urgently. I really need this sorted today.",
         "label": "billing",
         "secondary": "technical",
     },
     {
         "email_id": "h003",
-        "subject": "API Timeouts + Billing for Inaccessible Features",
-        "body": "Your API keeps timing out. My engineering team has wasted three "
-                "weeks on this. Worse, you charged us for Enterprise features we "
-                "cannot even access because the API is broken. We want out of this "
-                "contract and a full refund for the Enterprise tier.",
+        "subject": "API issues + billing concern",
+        "body": "Hey team,\n\nOur team has been dealing with constant API timeouts "
+                "for the past few weeks now. It's affecting our work quite badly.\n\n"
+                "On top of that, we've been billed for Enterprise features that we "
+                "can't even use because of these issues.\n\nAt this point we're "
+                "considering cancelling the contract altogether. Please advise on "
+                "refund options.",
         "label": "complaint",
         "secondary": "technical",
     },
     {
         "email_id": "h004",
-        "subject": "Confused About Subscription Status",
-        "body": "Hi — I got an email saying my subscription auto-renews next week, "
-                "but I thought I cancelled it last month. The pricing on your website "
-                "also differs from what your sales rep quoted. The mobile app shows "
-                "my plan as 'expired' but the website shows 'active'. I'm confused "
-                "and don't want to be charged unexpectedly.",
+        "subject": "Subscription confusion",
+        "body": "Hi,\n\nI'm a bit confused about my subscription. I got an email "
+                "saying it will auto-renew next week, but I was pretty sure I "
+                "cancelled it last month.\n\nAlso, the pricing on the website looks "
+                "different from what I was originally told. And weirdly, the app "
+                "shows my plan as expired while the website says it's active.\n\n"
+                "Can you please clarify? I don't want to be charged unexpectedly.",
         "label": "billing",
         "secondary": "general",
     },
     {
         "email_id": "h005",
-        "subject": "Critical: Corrupted Data Export",
-        "body": "We discovered that data exported from your platform is corrupted — "
-                "records are missing and some are duplicated. We are a healthcare "
-                "provider and this is critical. We need the full dataset re-exported, "
-                "a root-cause analysis, and we want billing paused until this is "
-                "fully resolved.",
+        "subject": "Data export issue (urgent)",
+        "body": "Hi,\n\nWe recently exported data from your platform and noticed "
+                "some serious issues. A number of records are missing, and a few "
+                "are duplicated.\n\nWe're in healthcare, so this is quite critical "
+                "for us.\n\nWe need a clean re-export of the data, along with some "
+                "explanation of what went wrong. Also, it would help if billing "
+                "could be paused until this is resolved.\n\nPlease treat this as urgent.",
         "label": "technical",
         "secondary": "billing",
     },
