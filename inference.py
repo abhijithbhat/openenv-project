@@ -33,7 +33,7 @@ from environment import EmailTriageEnvironment
 from models import EmailAction
 
 # ---------------------------------------------------------------------------
-# Configuration — read from environment variables (MANDATORY per hackathon rules)
+# Configuration — all credentials read from environment variables
 # ---------------------------------------------------------------------------
 
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
