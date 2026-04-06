@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-serve = "server.app:start"
+server = "server.app:main"
 
 [project.urls]
 Homepage = "https://huggingface.co/spaces/abhijithbhat/openenv-project"
