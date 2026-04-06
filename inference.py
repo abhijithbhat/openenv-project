@@ -1,29 +1,28 @@
 """
 Baseline Inference Script — Content Moderation OpenEnv
 =======================================================
-Runs a baseline LLM agent against all three tasks and reports
-reproducible scores.
-
-The environment is imported DIRECTLY — no running server required.
-This guarantees the script works in any sterile execution context.
+Runs a baseline LLM agent against all three tasks over HTTP and reports
+reproducible scores. Communicates with the FastAPI server running at
+http://localhost:7860 to prove the full end-to-end server flow works.
 
 Usage:
+    # 1. Start the server first (in a separate terminal):
+    #    uvicorn server:app --host 0.0.0.0 --port 7860
+    #
+    # 2. Then run this script:
     export HF_TOKEN=hf_xxxx
-    export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct   # or any OpenAI-compat model
-    export API_BASE_URL=https://router.huggingface.co/v1     # default
+    export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+    export API_BASE_URL=https://router.huggingface.co/v1
     python inference.py
 """
 from __future__ import annotations
 
 import os
 import sys
+import time
 
+import requests
 from openai import OpenAI
-
-# Import environment directly — no HTTP server required
-from environment import ContentModerationEnvironment
-from graders import TASK_DATA
-from models import ContentModerationAction
 
 # ---------------------------------------------------------------------------
 # Configuration — all credentials read from environment variables
@@ -32,6 +31,7 @@ from models import ContentModerationAction
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 HF_TOKEN: str = os.getenv("HF_TOKEN", "")
+ENV_SERVER_URL: str = os.getenv("ENV_SERVER_URL", "http://localhost:7860")
 TEMPERATURE: float = 0.0   # deterministic for reproducibility
 MAX_TOKENS: int = 20       # we only need one word
 
@@ -103,34 +103,68 @@ def get_agent_action(client: OpenAI, post_content: str,
 
 
 # ---------------------------------------------------------------------------
-# Episode runner — uses environment directly (no HTTP server needed)
+# HTTP helpers — communicating with the FastAPI server at localhost:7860
 # ---------------------------------------------------------------------------
 
-def run_episode(client: OpenAI, env: ContentModerationEnvironment,
-                task_name: str) -> float:
-    """Run one full episode and return the normalised episode score."""
+def http_post(endpoint: str, payload: dict) -> dict:
+    """POST JSON to the environment server and return the parsed response."""
+    url = f"{ENV_SERVER_URL}{endpoint}"
+    response = requests.post(url, json=payload, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def http_get(endpoint: str) -> dict:
+    """GET the environment server and return the parsed response."""
+    url = f"{ENV_SERVER_URL}{endpoint}"
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+# ---------------------------------------------------------------------------
+# Episode runner — communicates over HTTP to prove server works end-to-end
+# ---------------------------------------------------------------------------
+
+def run_episode(client: OpenAI, task_name: str) -> float:
+    """Run one full episode over HTTP and return the normalised episode score."""
     print(f"\n  Running task: {task_name}")
 
-    obs = env.reset(task_name=task_name)
-    max_steps = obs.max_steps
+    # Reset the environment via HTTP — returns the first post as JSON
+    obs = http_post(f"/reset?task_name={task_name}", {})
+    max_steps = obs.get("max_steps", 5)
     total_reward = 0.0
     step = 0
 
     while True:
         step += 1
-        action_str = get_agent_action(
-            client, obs.content, obs.platform, obs.context
-        )
+        post_content = obs.get("content", "")
+        platform = obs.get("platform", "unknown")
+        context = obs.get("context")
+
+        # Ask the LLM agent for a moderation decision
+        action_str = get_agent_action(client, post_content, platform, context)
         print(f"    Step {step}/{max_steps} | action={action_str:<10}", end="")
 
-        result = env.step(ContentModerationAction(action=action_str))  # type: ignore[arg-type]
-        total_reward += result.reward
-        correct = result.info.get("correct_action", "?")
-        print(f"| reward={result.reward:.2f} | correct={correct}")
+        # Submit the action via HTTP — returns reward, done, and next observation
+        result = http_post("/step", {
+            "action": action_str,
+            "confidence": None,
+            "reasoning": None,
+        })
 
-        if result.done:
+        reward = result.get("reward", 0.0)
+        done = result.get("done", True)
+        info = result.get("info", {})
+        total_reward += reward
+
+        print(f"| reward={reward:.2f} | correct={info.get('correct_action', '?')}")
+
+        if done:
             break
-        obs = result.observation  # type: ignore[assignment]
+
+        obs = result.get("observation", {})
+        time.sleep(0.3)  # small delay to avoid rate-limiting on the LLM API
 
     episode_score = round(total_reward / max_steps, 4)
     print(f"  Episode score: {episode_score:.4f}  ({total_reward:.1f}/{max_steps})")
@@ -148,20 +182,28 @@ def main() -> None:
         print("Export your HuggingFace token: export HF_TOKEN=hf_xxxx")
         sys.exit(1)
 
+    # Confirm the server is reachable before starting
+    try:
+        health = http_get("/health")
+        assert health.get("status") == "healthy"
+        print(f"[OK] Server is live at {ENV_SERVER_URL}")
+    except Exception:
+        print(f"\nError: Could not reach the environment server at {ENV_SERVER_URL}")
+        print("Start the server first with:")
+        print("  uvicorn server:app --host 0.0.0.0 --port 7860")
+        sys.exit(1)
+
     print(f"Model : {MODEL_NAME}")
     print(f"API   : {API_BASE_URL}")
     print(f"Tasks : {TASK_NAMES}")
 
-    # Initialise OpenAI client (pointing at HuggingFace Router)
+    # Initialise OpenAI client pointing at HuggingFace Router
     client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
 
-    # Single environment instance reused across all tasks
-    env = ContentModerationEnvironment()
-
-    # Run all tasks and collect scores
+    # Run all three tasks and collect scores
     scores: dict[str, float] = {}
     for task in TASK_NAMES:
-        scores[task] = run_episode(client, env, task)
+        scores[task] = run_episode(client, task)
 
     # Print summary
     print("\n" + "=" * 52)
