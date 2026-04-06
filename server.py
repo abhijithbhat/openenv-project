@@ -1,52 +1,55 @@
 """
-FastAPI Server — Email Triage OpenEnv Environment
-==================================================
-Exposes the full OpenEnv HTTP interface:
-
-    POST /reset   → EmailObservation   (start a new episode)
-    POST /step    → StepResult         (take one classification action)
-    GET  /state   → EnvState           (episode metadata)
-    GET  /tasks   → list of available tasks
-    GET  /health  → health check
-    GET  /        → environment info
-
-The pre-submission validator (validate-submission.sh) pings POST /reset
-and expects HTTP 200. This server must be running for validation to pass.
-
-Start locally:
-    uvicorn server:app --host 0.0.0.0 --port 7860 --reload
-
-In Docker / HuggingFace Spaces:
-    CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "7860"]
+FastAPI Server — Content Moderation OpenEnv Environment
+=========================================================
+Exposes the standard OpenEnv API:
+  POST /reset   → Start new episode, returns first post
+  POST /step    → Submit enforcement decision, returns reward + next post
+  GET  /state   → Current episode metadata
+  GET  /health  → Liveness probe (required for HuggingFace Spaces)
+  GET  /docs    → Auto-generated OpenAPI docs (FastAPI built-in)
 """
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from environment import EmailTriageEnvironment
-from models import EmailAction, EmailObservation, EnvState, StepResult
+from environment import ContentModerationEnvironment, VALID_TASKS
+from models import ContentModerationAction, ContentObservation, EnvState, StepResult
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Content Moderation Environment starting up.")
+    yield
+    logger.info("Content Moderation Environment shutting down.")
 
 app = FastAPI(
-    title="Email Triage Environment",
+    title="Content Moderation OpenEnv",
     description=(
-        "Real-world customer support email triage environment built on the "
-        "OpenEnv specification. Supports step() / reset() / state() API."
+        "A social media content moderation environment for training and evaluating "
+        "AI agents. Features an asymmetric, severity-weighted reward function — "
+        "missing hate speech is far worse than flagging satire."
     ),
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Allow cross-origin requests (required for HuggingFace Spaces)
@@ -59,156 +62,110 @@ app.add_middleware(
 
 # ---------------------------------------------------------------------------
 # Global environment instance
-# (single-session for hackathon evaluation; one episode at a time)
 # ---------------------------------------------------------------------------
 
-_env = EmailTriageEnvironment()
+env = ContentModerationEnvironment()
 
+# ---------------------------------------------------------------------------
+# Request / Response schemas (thin wrappers for OpenAPI docs)
+# ---------------------------------------------------------------------------
+
+class ResetResponse(BaseModel):
+    observation: ContentObservation
+
+class StepRequest(BaseModel):
+    action: str
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/", tags=["info"])
-def root() -> dict:
-    """Environment info and available endpoints."""
-    return {
-        "environment": "email-triage-env",
-        "version": "1.0.0",
-        "description": (
-            "Real-world customer support email triage environment. "
-            "An AI agent classifies customer emails into billing / technical / "
-            "general / refund / complaint categories."
-        ),
-        "endpoints": {
-            "POST /reset":  "Start a new episode",
-            "POST /step":   "Take a classification action",
-            "GET  /state":  "Get current episode metadata",
-            "GET  /tasks":  "List available tasks",
-            "GET  /health": "Health check",
-        },
-        "tasks": ["easy_triage", "medium_triage", "hard_triage"],
-        "action_space": ["billing", "technical", "general", "refund", "complaint"],
-    }
-
-
-@app.get("/health", tags=["info"])
-def health() -> dict:
-    """Simple health check — returns 200 OK when the server is live."""
-    return {"status": "healthy"}
-
-
-@app.get("/tasks", tags=["info"])
-def list_tasks() -> dict:
-    """List all available tasks with descriptions."""
-    return {
-        "tasks": [
-            {
-                "name": "easy_triage",
-                "difficulty": "easy",
-                "description": "5 simple, single-intent customer support emails. Binary scoring.",
-                "n_emails": 5,
-                "scoring": "1.0 for correct category, 0.0 otherwise.",
-            },
-            {
-                "name": "medium_triage",
-                "difficulty": "medium",
-                "description": "5 emails with primary + secondary valid labels. Partial credit.",
-                "n_emails": 5,
-                "scoring": "1.0 for primary, 0.5 for secondary, 0.0 otherwise.",
-            },
-            {
-                "name": "hard_triage",
-                "difficulty": "hard",
-                "description": "5 complex, multi-intent emails. Escalation-aware scoring.",
-                "n_emails": 5,
-                "scoring": "1.0 primary, 0.4 secondary, 0.2 escalation-detected, 0.0 wrong.",
-            },
-        ]
-    }
-
-
 @app.post(
     "/reset",
-    response_model=EmailObservation,
-    tags=["openenv"],
-    summary="Reset the environment and start a new episode.",
+    response_model=ContentObservation,
+    summary="Start a new episode",
+    description=(
+        "Resets the environment and returns the first post to review. "
+        f"Valid task names: {VALID_TASKS}"
+    ),
 )
-def reset(
-    task_name: Optional[str] = Query(
-        default="easy_triage",
-        description="Task to run: easy_triage | medium_triage | hard_triage",
+async def reset(
+    task_name: str = Query(
+        default="easy_moderation",
+        description="Task difficulty: easy_moderation | medium_moderation | hard_moderation",
     )
-) -> EmailObservation:
-    """
-    Reset the environment.
-
-    - Initialises a new episode for the given task.
-    - Returns the first EmailObservation (the first email to classify).
-    - Must be called before any step().
-
-    This endpoint is pinged by the OpenEnv validator — it MUST return HTTP 200.
-    """
-    valid = ("easy_triage", "medium_triage", "hard_triage")
-    if task_name not in valid:
+) -> ContentObservation:
+    if task_name not in VALID_TASKS:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid task_name '{task_name}'. Must be one of {valid}.",
+            detail=f"Invalid task '{task_name}'. Valid tasks: {VALID_TASKS}",
         )
-
     try:
-        obs = _env.reset(task_name=task_name)
-        logger.info("Episode reset. task=%s episode_id=%s", task_name, _env.state().episode_id)
+        obs = env.reset(task_name=task_name)
+        logger.info("Episode started | task=%s | episode_id=%s", task_name, env.state().episode_id)
         return obs
     except Exception as exc:
-        logger.exception("reset() error: %s", exc)
+        logger.exception("Error in /reset")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post(
     "/step",
     response_model=StepResult,
-    tags=["openenv"],
-    summary="Execute one classification action.",
+    summary="Submit an enforcement decision",
+    description=(
+        "Submit your action for the current post. "
+        "Valid actions: remove | restrict | label | escalate | allow. "
+        "Returns the step reward (asymmetric on hard tasks), done flag, "
+        "and the next post to review."
+    ),
 )
-def step(action: EmailAction) -> StepResult:
-    """
-    Take one step in the current episode.
-
-    - Accepts an EmailAction (category + optional confidence).
-    - Returns a StepResult with the next observation, reward, and done flag.
-    - `info` contains the correct label and reward explanation for debugging.
-    - When `done=True`, call /reset to start a new episode.
-    """
+async def step(request: StepRequest) -> StepResult:
+    valid_actions = ["remove", "restrict", "label", "escalate", "allow"]
+    if request.action not in valid_actions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid action '{request.action}'. Valid actions: {valid_actions}",
+        )
     try:
-        result = _env.step(action)
+        action = ContentModerationAction(
+            action=request.action,  # type: ignore[arg-type]
+            confidence=request.confidence,
+            reasoning=request.reasoning,
+        )
+        result = env.step(action)
         logger.info(
-            "Step taken. category=%s reward=%.2f done=%s",
-            action.category,
-            result.reward,
-            result.done,
+            "Step | action=%s | reward=%.2f | done=%s",
+            request.action, result.reward, result.done,
         )
         return result
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("step() error: %s", exc)
+        logger.exception("Error in /step")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get(
     "/state",
     response_model=EnvState,
-    tags=["openenv"],
-    summary="Get current episode state / metadata.",
+    summary="Get current episode state",
+    description="Returns episode metadata: step count, cumulative reward, task name.",
 )
-def state() -> EnvState:
-    """
-    Return current episode metadata.
-
-    Includes episode_id, step_count, total_reward, task_name, and difficulty.
-    Safe to call at any time.
-    """
+async def state() -> EnvState:
     try:
-        return _env.state()
+        return env.state()
     except Exception as exc:
-        logger.exception("state() error: %s", exc)
+        logger.exception("Error in /state")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get(
+    "/health",
+    summary="Health check",
+    description="Liveness probe. Returns 200 if the server is running.",
+)
+async def health():
+    return {"status": "healthy", "environment": "content_moderation"}

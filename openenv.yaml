@@ -1,80 +1,90 @@
-spec_version: 1
-name: email-triage-env
+spec_version: "1.0"
+name: content-moderation-openenv
 version: "1.0.0"
 description: >
-  Real-world customer support email triage environment.
-  An AI agent classifies incoming customer emails into one of five routing
-  categories: billing, technical, general, refund, or complaint.
-  Tasks range from easy (single-intent emails) to hard (multi-intent,
-  escalated emails) with partial-credit reward signals.
+  A social media content moderation environment where an AI agent reviews
+  flagged posts and decides the appropriate enforcement action.
+  Features an asymmetric, severity-weighted reward function: missing
+  critical hate speech earns 0.0 (catastrophic false negative), while
+  wrongly removing satire earns only 0.05. Escalating to a human reviewer
+  always earns partial credit on ambiguous content.
 
-author: "Hackathon Team"
-license: MIT
+app:
+  type: fastapi
+  module: server
+  instance: app
+  port: 7860
 
-# Server configuration (FastAPI via uvicorn)
-app: server:app
-port: 7860
-runtime: python
-
-# Action space
 action_space:
-  type: categorical
+  type: discrete
   values:
-    - billing
-    - technical
-    - general
-    - refund
-    - complaint
+    - remove    # Take the post down completely
+    - restrict  # Reduce distribution / age-gate
+    - label     # Add a misinformation or context warning label
+    - escalate  # Send to a human reviewer
+    - allow     # No action, content is within policy
 
-# Observation space
 observation_space:
-  type: dict
+  type: object
   fields:
-    email_id:             { type: string, description: "Unique email ID" }
-    subject:              { type: string, description: "Email subject line" }
-    body:                 { type: string, description: "Email body text" }
-    task_name:            { type: string, description: "Active task name" }
-    step:                 { type: integer, description: "Current step (1-based)" }
-    max_steps:            { type: integer, description: "Total emails in episode" }
-    available_categories: { type: array,   description: "Valid action values" }
+    post_id:
+      type: string
+      description: Unique identifier for the post
+    content:
+      type: string
+      description: Full text of the social media post
+    platform:
+      type: string
+      description: Platform the post appeared on (facebook, instagram, threads)
+    context:
+      type: string
+      nullable: true
+      description: Additional signal such as report count or account type
+    task_name:
+      type: string
+      description: Active task name
+    step:
+      type: integer
+      description: Current step within the episode (1-based)
+    max_steps:
+      type: integer
+      description: Total number of posts in this episode
+    available_actions:
+      type: array
+      items: string
+      description: Valid action values for this environment
 
-# Three tasks with difficulty progression (easy → medium → hard)
 tasks:
-  - name: easy_triage
+  - name: easy_moderation
+    description: >
+      Clear, unambiguous posts. Each post has a single obviously correct
+      enforcement action. Binary scoring: 1.0 for correct, 0.0 for wrong.
+      Designed to establish a performance baseline for the agent.
     difficulty: easy
-    description: >
-      5 simple, single-intent customer support emails.
-      Binary scoring: 1.0 for correct label, 0.0 otherwise.
-    n_emails: 5
-    score_range: [0.0, 1.0]
+    max_steps: 5
+    reward_range: [0.0, 1.0]
+    grader: programmatic
 
-  - name: medium_triage
+  - name: medium_moderation
+    description: >
+      Posts with a primary and a secondary valid enforcement action.
+      Partial credit (0.5) awarded for the secondary valid action.
+      Escalating to a human always earns 0.3 partial credit.
+      Tests whether the agent can identify nuanced, multi-interpretation posts.
     difficulty: medium
-    description: >
-      5 emails with a primary and a secondary valid label.
-      Partial-credit scoring: 1.0 primary, 0.5 secondary, 0.0 wrong.
-    n_emails: 5
-    score_range: [0.0, 1.0]
+    max_steps: 5
+    reward_range: [0.0, 1.0]
+    grader: programmatic
 
-  - name: hard_triage
+  - name: hard_moderation
+    description: >
+      Context-dependent, ambiguous posts with asymmetric severity-weighted
+      rewards. Two post types:
+        Type A (critical violation): allowing through = 0.0 (catastrophic).
+        Type B (safe content): removing = 0.05 (silencing legitimate speech).
+      Escalating is always partially valid. Tests handling of coded hate speech,
+      satire-vs-hate-speech, veiled threats, and accurate-but-alarming information.
     difficulty: hard
-    description: >
-      5 complex, multi-intent, or escalated emails.
-      Escalation-aware scoring: 1.0 primary, 0.4 secondary,
-      0.2 complaint-detection credit, 0.0 wrong.
-    n_emails: 5
-    score_range: [0.0, 1.0]
-
-# Reward design
-reward:
-  type: shaped
-  range: [0.0, 1.0]
-  description: >
-    Per-step reward based on classification accuracy.
-    Partial progress signals are provided for medium and hard tasks.
-    No penalties for action re-tries (noop-equivalent = returning 'general').
-
-# Episode boundaries
-episode:
-  max_steps: 5
-  termination: "All emails in the task have been classified."
+    max_steps: 5
+    reward_range: [0.0, 1.0]
+    grader: programmatic

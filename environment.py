@@ -1,142 +1,142 @@
 """
-Email Triage Environment — Core Logic
-======================================
-Implements the OpenEnv Environment interface:
-    reset()  → EmailObservation
-    step()   → StepResult
-    state()  → EnvState
+Content Moderation Environment — OpenEnv Implementation
+========================================================
+Simulates a real-world social media content review queue.
+An agent reviews posts and decides: remove | restrict | label | escalate | allow
 
-This module is imported by server.py (FastAPI) and by inference.py.
+Reward is ASYMMETRIC — missing critical hate speech earns 0.0,
+wrongly removing satire earns 0.05. See graders.py for full rationale.
 """
 from __future__ import annotations
 
+import random
 import uuid
-from typing import List, Optional
+from typing import Optional
 
-from graders import STEP_REWARD_FN, TASK_DATA
-from models import EmailAction, EmailObservation, EnvState, StepResult
+from models import (
+    ActionType,
+    ContentModerationAction,
+    ContentObservation,
+    EnvState,
+    StepResult,
+)
+from graders import TASK_DATA, STEP_REWARD_FN
+
+VALID_TASKS = list(TASK_DATA.keys())
+AVAILABLE_ACTIONS: list[ActionType] = ["remove", "restrict", "label", "escalate", "allow"]
 
 
-_VALID_TASKS = ("easy_triage", "medium_triage", "hard_triage")
-
-
-class EmailTriageEnvironment:
+class ContentModerationEnvironment:
     """
-    Real-world customer-support email triage environment.
+    OpenEnv-compliant environment for social media content moderation.
 
-    An AI agent is shown a sequence of customer emails and must classify
-    each one into one of five routing categories:
-        billing | technical | general | refund | complaint
-
-    Episode flow
-    ------------
-    1. Call reset(task_name) → get the first EmailObservation.
-    2. For each step, call step(EmailAction) → get StepResult.
-    3. Continue until StepResult.done is True.
-    4. Call state() at any time for episode metadata.
-
-    Tasks
-    -----
-    - easy_triage   : 5 single-intent emails, binary scoring.
-    - medium_triage : 5 emails with primary + secondary labels, partial credit.
-    - hard_triage   : 5 complex multi-intent emails, escalation-aware scoring.
+    Public API
+    ----------
+    reset(task_name)  →  ContentObservation   (first post in episode)
+    step(action)      →  StepResult           (reward + next post)
+    state()           →  EnvState             (current episode metadata)
     """
 
     def __init__(self) -> None:
-        self._task_name: str = "easy_triage"
-        self._emails: List[dict] = []
+        self._episode_id: str = ""
+        self._task_name: str = ""
+        self._posts: list[dict] = []
         self._step_idx: int = 0
-        self._episode_id: str = str(uuid.uuid4())
         self._total_reward: float = 0.0
-        self._predictions: List[str] = []
+        self._started: bool = False
 
     # ------------------------------------------------------------------
     # OpenEnv API
     # ------------------------------------------------------------------
 
-    def reset(self, task_name: str = "easy_triage") -> EmailObservation:
+    def reset(self, task_name: str = "easy_moderation") -> ContentObservation:
         """
-        Start a new episode for the given task.
+        Start a new episode.
 
         Parameters
         ----------
-        task_name : one of 'easy_triage', 'medium_triage', 'hard_triage'.
+        task_name : One of 'easy_moderation', 'medium_moderation', 'hard_moderation'.
 
         Returns
         -------
-        EmailObservation — the first email in the episode.
+        ContentObservation with the first post in the queue.
         """
-        if task_name not in _VALID_TASKS:
+        if task_name not in VALID_TASKS:
             raise ValueError(
-                f"Unknown task '{task_name}'. Valid tasks: {_VALID_TASKS}"
+                f"Unknown task '{task_name}'. Valid tasks: {VALID_TASKS}"
             )
 
-        self._task_name = task_name
-        self._emails = TASK_DATA[task_name]
-        self._step_idx = 0
         self._episode_id = str(uuid.uuid4())
+        self._task_name = task_name
+        # Shuffle posts so each episode feels different
+        self._posts = list(TASK_DATA[task_name])
+        random.shuffle(self._posts)
+        self._step_idx = 0
         self._total_reward = 0.0
-        self._predictions = []
+        self._started = True
 
         return self._make_observation()
 
-    def step(self, action: EmailAction) -> StepResult:
+    def step(self, action: ContentModerationAction) -> StepResult:
         """
-        Execute one classification action.
+        Apply an enforcement decision to the current post.
 
         Parameters
         ----------
-        action : EmailAction with category and optional confidence.
+        action : ContentModerationAction with .action field.
 
         Returns
         -------
-        StepResult with next observation (or None if done), reward, done flag,
-        and info dict containing the correct label for transparency.
+        StepResult with reward, done flag, and next observation.
         """
-        if self._step_idx >= len(self._emails):
-            # Environment already done — return terminal result
+        if not self._started:
+            raise RuntimeError("Call reset() before step().")
+
+        if self._step_idx >= len(self._posts):
+            # Episode already finished — return terminal result
             return StepResult(
                 observation=None,
                 reward=0.0,
                 done=True,
-                info={"error": "Episode already finished. Call reset() to start a new one."},
+                info={"message": "Episode already complete."},
             )
 
-        current_email = self._emails[self._step_idx]
-        predicted = action.category
-        truth = current_email["label"]
-        secondary = current_email.get("secondary")
+        current_post = self._posts[self._step_idx]
 
-        # Calculate reward using the task-specific function
+        # Calculate asymmetric reward using the task-specific function
         reward_fn = STEP_REWARD_FN[self._task_name]
-        reward = reward_fn(predicted, truth, secondary)
-
+        reward = reward_fn(
+            action.action,
+            current_post["label"],
+            current_post.get("secondary"),
+            current_post.get("severity", "low"),
+            current_post.get("post_type", "A"),
+        )
+        reward = round(float(reward), 4)
         self._total_reward += reward
-        self._predictions.append(predicted)
         self._step_idx += 1
 
-        done = self._step_idx >= len(self._emails)
-
-        info: dict = {
-            "email_id": current_email["email_id"],
-            "predicted": predicted,
-            "correct": truth,
-            "secondary_valid": secondary,
-            "reward": reward,
-            "step_reward_explanation": _explain_reward(
-                predicted, truth, secondary, reward, self._task_name
-            ),
-        }
-
-        next_obs: Optional[EmailObservation] = (
-            None if done else self._make_observation()
-        )
+        done = self._step_idx >= len(self._posts)
+        next_obs = None if done else self._make_observation()
 
         return StepResult(
             observation=next_obs,
             reward=reward,
             done=done,
-            info=info,
+            info={
+                "post_id": current_post["post_id"],
+                "correct_action": current_post["label"],
+                "secondary_action": current_post.get("secondary"),
+                "severity": current_post.get("severity"),
+                "post_type": current_post.get("post_type"),
+                "agent_action": action.action,
+                "reward_explanation": _explain_reward(
+                    action.action,
+                    current_post["label"],
+                    current_post.get("post_type", "A"),
+                    reward,
+                ),
+            },
         )
 
     def state(self) -> EnvState:
@@ -154,16 +154,17 @@ class EmailTriageEnvironment:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _make_observation(self) -> EmailObservation:
-        email = self._emails[self._step_idx]
-        return EmailObservation(
-            email_id=email["email_id"],
-            subject=email["subject"],
-            body=email["body"],
+    def _make_observation(self) -> ContentObservation:
+        post = self._posts[self._step_idx]
+        return ContentObservation(
+            post_id=post["post_id"],
+            content=post["content"],
+            platform=post["platform"],
+            context=post.get("context"),
             task_name=self._task_name,
             step=self._step_idx + 1,
-            max_steps=len(self._emails),
-            available_categories=["billing", "technical", "general", "refund", "complaint"],
+            max_steps=len(self._posts),
+            available_actions=AVAILABLE_ACTIONS,
         )
 
 
@@ -171,31 +172,26 @@ class EmailTriageEnvironment:
 # Private utility
 # ---------------------------------------------------------------------------
 
-def _explain_reward(
-    predicted: str,
-    truth: str,
-    secondary: Optional[str],
-    reward: float,
-    task: str,
-) -> str:
+def _explain_reward(predicted: str, truth: str, post_type: str,
+                    reward: float) -> str:
+    """Human-readable explanation of why this reward was awarded."""
     if reward == 1.0:
-        return f"Correct! '{predicted}' matches the primary label."
-    if reward == 0.5:
+        return "Correct decision."
+    if predicted == truth:
+        return "Correct decision."
+    if post_type == "A" and predicted == "allow":
         return (
-            f"Partial credit: '{predicted}' matches the secondary label "
-            f"'{secondary}'. Primary was '{truth}'."
+            "CATASTROPHIC false negative: harmful content was allowed through. "
+            "Reward: 0.0."
         )
-    if reward == 0.4:
+    if post_type == "B" and predicted == "remove":
         return (
-            f"Partial credit (hard task): '{predicted}' matches secondary "
-            f"label '{secondary}'. Primary was '{truth}'."
+            "Legitimate content was silenced. "
+            f"Correct action was '{truth}'. Reward: {reward}."
         )
-    if reward == 0.2:
+    if predicted == "escalate":
         return (
-            f"Minimal credit: agent detected escalation intent ('complaint') "
-            f"but primary label was '{truth}'."
+            "Escalation to human reviewer is always partially valid "
+            f"for ambiguous content. Reward: {reward}."
         )
-    return (
-        f"Incorrect. Predicted '{predicted}', correct was '{truth}'"
-        + (f" (secondary: '{secondary}')." if secondary else ".")
-    )
+    return f"Suboptimal decision. Correct action was '{truth}'. Reward: {reward}."

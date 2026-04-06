@@ -1,208 +1,233 @@
-# Email Triage Environment
+# Content Moderation OpenEnv
 
-> **Meta × Hugging Face OpenEnv Hackathon — Round 1 Submission**
+> **Meta × HuggingFace OpenEnv Hackathon** — Team AlgoRythms
 
-A **complete, real-world OpenEnv environment** for customer-support email triage. An AI agent classifies incoming customer emails into one of five routing categories, with three difficulty levels and meaningful partial-credit reward signals.
+A real-world social media content moderation environment where AI agents learn
+to make enforcement decisions: `remove`, `restrict`, `label`, `escalate`, or `allow`.
 
----
-
-## 🎯 Environment Description
-
-Real companies receive thousands of customer emails per day. Mis-routing a ticket wastes agent time and frustrates customers. This environment trains AI agents to accurately classify emails so they can be routed to the right team automatically.
-
-**Domain:** Customer Support Operations  
-**Task type:** Multi-class text classification with escalation detection  
-**Real-world utility:** Directly applicable to any SaaS, e-commerce, or FinTech support queue
+The core innovation is an **asymmetric, severity-weighted reward function** — missing
+critical hate speech earns **0.0** (catastrophic), while wrongly removing satire earns
+only **0.05**. This mirrors the true cost structure of real-world content moderation.
 
 ---
 
-## 🔑 Key Features
+## Why Content Moderation?
 
-| Feature | Details |
-|---|---|
-| Real-world task | Customer support email triage (not a game/toy) |
-| Full OpenEnv spec | `step()` / `reset()` / `state()` + typed Pydantic models |
-| 3 difficulty levels | easy → medium → hard with increasing ambiguity |
-| Partial-credit rewards | Signals guide agents on multi-intent emails |
-| Reproducible baseline | LLM inference script with per-task scores |
-| Docker ready | FastAPI + uvicorn on port 7860 |
+Content moderation is one of the hardest, highest-stakes problems in AI. At Meta's
+scale (billions of posts per day), the cost of a false negative (letting through
+real hate speech) is catastrophically higher than a false positive (removing a joke).
+A binary win/lose reward function fails to model this reality.
+
+Our asymmetric reward design is the differentiator — it teaches an agent that *which
+mistake you make* matters as much as *whether you make a mistake*.
 
 ---
 
-## 📐 Action Space
+## Environment Overview
 
-The agent must output **exactly one** of:
+| Component | Detail |
+|-----------|--------|
+| **Framework** | FastAPI + Pydantic |
+| **OpenEnv spec** | v1.0 — `step()` / `reset()` / `state()` |
+| **Action space** | Discrete: `remove`, `restrict`, `label`, `escalate`, `allow` |
+| **Observation** | Post content, platform, context signal, step metadata |
+| **Tasks** | 3 (easy → medium → hard), 5 posts each |
+| **Reward** | Asymmetric, severity-weighted (see Reward Design below) |
+| **Deployment** | HuggingFace Spaces (Docker), port 7860 |
 
-| Category | When to use |
-|---|---|
-| `billing` | Payment failures, invoice errors, wrong charges |
-| `technical` | App crashes, API errors, login issues, bugs |
-| `general` | Product questions, feature inquiries, general info |
-| `refund` | Explicit refund or cancellation request |
-| `complaint` | Escalated frustration, legal threats, repeated failures |
+---
+
+## Action Space
+
+| Action | Description |
+|--------|-------------|
+| `remove` | Take the post down completely. For clear violations. |
+| `restrict` | Age-gate or reduce distribution. For borderline content. |
+| `label` | Add a warning or context label. Lightest intervention. |
+| `escalate` | Send to a human reviewer. Use when genuinely unsure. |
+| `allow` | No action needed. Content is within policy. |
+
+---
+
+## Observation Space
 
 ```json
 {
-  "category": "billing",
-  "confidence": 0.95
-}
-```
-
----
-
-## 👁️ Observation Space
-
-Each step returns an email to classify:
-
-```json
-{
-  "email_id": "m003",
-  "subject": "Cancel and Refund Request",
-  "body": "I want to cancel my subscription and receive a full refund...",
-  "task_name": "medium_triage",
-  "step": 3,
+  "post_id": "h001",
+  "content": "Full post text...",
+  "platform": "facebook",
+  "context": "Reported 847 times in the last 6 hours.",
+  "task_name": "hard_moderation",
+  "step": 1,
   "max_steps": 5,
-  "available_categories": ["billing", "technical", "general", "refund", "complaint"]
+  "available_actions": ["remove", "restrict", "label", "escalate", "allow"]
 }
 ```
 
 ---
 
-## 🏆 Tasks & Reward Function
+## Tasks
 
-### Task 1: `easy_triage` (Easy)
-- 5 single-intent emails with clear keywords
-- **Scoring:** 1.0 correct / 0.0 wrong (binary)
-- Expected baseline score: ~0.80–1.00
+### Easy (`easy_moderation`)
+Clear, unambiguous posts. Single correct action. Binary reward.
 
-### Task 2: `medium_triage` (Medium)
-- 5 emails with a primary label and a valid secondary label
-- **Scoring:** 1.0 primary / 0.5 secondary / 0.0 wrong
-- Expected baseline score: ~0.60–0.85
+Examples: obvious hate speech, spam, clear satire, dangerous medical misinformation,
+accurate news articles.
 
-### Task 3: `hard_triage` (Hard)
-- 5 complex, multi-intent, or escalated emails
-- **Scoring:** 1.0 primary / 0.4 secondary / 0.2 escalation-detected / 0.0 wrong
-- Expected baseline score: ~0.40–0.70
-
-The reward function provides **partial progress signals** throughout the episode rather than only at the end. This enables RL algorithms to learn incrementally.
+**Reward:** 1.0 (correct) / 0.0 (wrong)
 
 ---
 
-## 🔌 API Endpoints
+### Medium (`medium_moderation`)
+Posts with a primary and a secondary valid enforcement action.
+Partial credit for the secondary valid action.
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/reset` | Start a new episode. Param: `task_name` |
-| `POST` | `/step` | Take a classification action |
-| `GET` | `/state` | Get current episode metadata |
-| `GET` | `/tasks` | List all available tasks |
-| `GET` | `/health` | Health check |
-| `GET` | `/docs` | Interactive API documentation |
+Examples: angry political rant (restrict or label?), unverified graphic content
+from a journalist account (escalate or restrict?).
+
+**Reward:** 1.0 (primary) / 0.5 (secondary) / 0.3 (escalate) / 0.0 (wrong)
 
 ---
 
-## 🚀 Setup & Usage
+### Hard (`hard_moderation`) — The Core Innovation
 
-### Prerequisites
-- Python 3.10+
-- Docker (for containerised deployment)
-- Hugging Face account + token
+Context-dependent posts with **asymmetric severity-weighted rewards**.
 
-### Local Development (without Docker)
+Two post types:
+
+**Type A — Critical violation disguised or coded:**
+```
+Correct (remove):  1.0
+Escalate:          0.55  ← correct instinct, human will catch it
+Secondary match:   0.5
+Restrict:          0.25  ← partial enforcement
+Label:             0.15  ← insufficient
+Allow:             0.0   ← CATASTROPHIC false negative
+```
+
+**Type B — Safe content that looks dangerous (satire, testimony, cited research):**
+```
+Correct (allow):   1.0
+Label:             0.55  ← unnecessary but harmless
+Escalate:          0.45  ← overcautious but acceptable
+Secondary match:   0.5
+Restrict:          0.2   ← suppressing valid speech
+Remove:            0.05  ← silencing legitimate content — very bad
+```
+
+Hard task examples include:
+- **Coded antisemitism** disguised as "just connecting dots" → must `remove`
+- **Satire** about local drivers using hyperbolic language → must `allow`
+- **Veiled school threat** using fictional framing → must `remove` (severity: critical)
+- **Accurate WHO clinical trial data** that sounds alarming → must `allow`
+- **Personal discrimination testimony** using a slur in testimonial context → must `allow`
+
+---
+
+## API Endpoints
+
+### `POST /reset?task_name=easy_moderation`
+Start a new episode.
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/your-team/openenv-project.git
-cd openenv-project
+curl -X POST "http://localhost:7860/reset?task_name=hard_moderation"
+```
 
-# 2. Install dependencies
+### `POST /step`
+Submit an enforcement decision.
+
+```bash
+curl -X POST http://localhost:7860/step \
+  -H "Content-Type: application/json" \
+  -d '{"action": "remove", "confidence": 0.9, "reasoning": "Coded hate speech"}'
+```
+
+Response includes `reward`, `done`, and `info.reward_explanation`.
+
+### `GET /state`
+Current episode metadata.
+
+### `GET /health`
+Returns `{"status": "healthy"}`. Used by the automated validator.
+
+### `GET /docs`
+Auto-generated interactive API docs (FastAPI).
+
+---
+
+## Setup & Running Locally
+
+```bash
+# 1. Clone and create venv
+git clone https://github.com/abhijithbhat/openenv-project
+cd openenv-project
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Start the server
+# 2. Start the server
 uvicorn server:app --host 0.0.0.0 --port 7860 --reload
 
-# 4. Test in another terminal
-curl -X POST http://localhost:7860/reset?task_name=easy_triage
+# 3. Test endpoints
+curl -X POST "http://localhost:7860/reset?task_name=easy_moderation"
 curl -X POST http://localhost:7860/step \
-     -H "Content-Type: application/json" \
-     -d '{"category": "billing", "confidence": 0.9}'
-curl http://localhost:7860/state
+  -H "Content-Type: application/json" -d '{"action": "allow"}'
+curl http://localhost:7860/health
 ```
 
-### Run Inference Script
+---
+
+## Running the Baseline Inference Script
 
 ```bash
-export API_BASE_URL="https://router.huggingface.co/v1"
-export MODEL_NAME="meta-llama/Meta-Llama-3-8B-Instruct"
-export HF_TOKEN="hf_your_token_here"
+export HF_TOKEN=hf_your_token_here
+export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+export API_BASE_URL=https://router.huggingface.co/v1
+export ENV_SERVER_URL=http://localhost:7860
 
 python inference.py
 ```
 
-### Docker Build & Run
-
-```bash
-docker build -t email-triage-env .
-docker run -p 7860:7860 \
-  -e HF_TOKEN="${HF_TOKEN}" \
-  email-triage-env
-```
-
----
-
-## 📊 Baseline Scores
-
-Run with `meta-llama/Meta-Llama-3-8B-Instruct` via HuggingFace Router:
+### Baseline Scores (Llama-3-8B)
 
 | Task | Score |
-|---|---|
-| easy_triage | ~0.90 |
-| medium_triage | ~0.70 |
-| hard_triage | ~0.52 |
-| **Overall** | **~0.71** |
+|------|-------|
+| `easy_moderation` | ~0.80 |
+| `medium_moderation` | ~0.55 |
+| `hard_moderation` | ~0.35 |
 
-*(Exact scores vary by model. Run `python inference.py` to reproduce.)*
+Hard task scores are intentionally low — the asymmetric reward makes hard tasks
+genuinely challenging for current frontier models. Satire detection and coded
+hate speech recognition remain unsolved problems.
 
 ---
 
-## 📁 Project Structure
+## Docker
 
-```
-openenv-project/
-├── server.py          # FastAPI server (POST /reset, /step, GET /state)
-├── environment.py     # Core environment logic (reset/step/state)
-├── models.py          # Typed Pydantic models (Action, Observation, State)
-├── graders.py         # Task graders + email datasets
-├── inference.py       # Baseline inference script (OpenAI client)
-├── openenv.yaml       # OpenEnv manifest
-├── requirements.txt   # Python dependencies
-├── Dockerfile         # Container definition
-└── README.md          # This file
+```bash
+docker build -t content-mod-env .
+docker run -p 7860:7860 content-mod-env
 ```
 
 ---
 
-## 🧠 Design Decisions
+## Reward Design Rationale
 
-1. **Why email triage?** It's a concrete, measurable task every company faces — not contrived.
-2. **Why 5 emails per task?** Balances evaluation speed (< 20 min inference budget) with statistical validity.
-3. **Why partial credit on hard tasks?** Multi-intent tickets genuinely belong to multiple queues. Binary scoring would punish reasonable predictions.
-4. **Why the `complaint` category?** Escalation detection is a real operational need — it triggers SLA escalation workflows in production systems.
-5. **Why FastAPI?** It's the standard for OpenEnv deployments and generates automatic `/docs` for transparency.
+The asymmetric reward function is documented in full in `graders.py`. The key insight:
 
----
+> In real-world content moderation, the cost of a false negative (letting through
+> hate speech) is not equal to the cost of a false positive (removing satire).
+> A binary reward function cannot model this. Our grader uses post-type and severity
+> metadata to apply the appropriate penalty, creating a richer training signal for
+> agents operating in safety-critical domains.
 
-## ⚙️ Environment Variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `API_BASE_URL` | Yes | LLM API endpoint |
-| `MODEL_NAME` | Yes | Model identifier |
-| `HF_TOKEN` | Yes | HuggingFace / API key |
+This reward design would be directly applicable to production content moderation
+systems at scale.
 
 ---
 
-## 📜 License
+## Team AlgoRythms
+- Thejas J (Team Lead)
+- Raghavendra
+- Abhijith M Bhat
 
-MIT License
+*Meta × HuggingFace OpenEnv Hackathon, April 2026*
