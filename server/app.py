@@ -142,11 +142,11 @@ async def health():
     return {"status": "healthy", "environment": "content_moderation"}
 
 
-def start():
-    """Entry point for project.scripts."""
+def main():
+    """Entry point for project.scripts — required by openenv validate."""
     import uvicorn
     uvicorn.run("server.app:app", host="0.0.0.0", port=7860, workers=1)
 
 
 if __name__ == "__main__":
-    start()
+    main()
