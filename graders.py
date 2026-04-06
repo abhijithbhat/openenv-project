@@ -1,18 +1,43 @@
 """
-Graders — Email Triage Environment
-====================================
-Programmatic graders for each difficulty level.
-All graders return a float in [0.0, 1.0].
+Graders — Social Media Content Moderation Environment
+======================================================
 
-Design principles
------------------
-- Easy   : exact-match only. Binary scoring.
-- Medium : full credit for primary label; 0.5 for the secondary (alternative
-           valid) label. Simulates real support queues where some tickets
-           legitimately belong to two departments.
-- Hard   : full credit for primary; 0.4 for secondary; 0.2 if the agent at
-           least detected escalation intent (complaint) for high-frustration
-           tickets. Penalises completely wrong answers with 0.0.
+REWARD DESIGN PHILOSOPHY
+-------------------------
+This is the core innovation: an ASYMMETRIC, SEVERITY-WEIGHTED reward function.
+
+Real content moderation is NOT symmetric. These two mistakes are NOT equally bad:
+
+  False Negative: Letting hate speech through     → Users harmed, platform liable
+  False Positive: Removing a satirical post       → Creator annoyed, appeal possible
+
+So we penalise them differently. Missing critical hate speech or a veiled threat
+scores 0.0 (catastrophic). Wrongly removing satire scores 0.1 (bad but recoverable).
+Escalating to a human for genuinely ambiguous content always earns partial credit
+(0.4–0.6) because that is the correct instinct — humans should make the final call
+on borderline content.
+
+Task Difficulty
+---------------
+Easy   — Clear, unambiguous posts. Exact-match binary scoring.
+Medium — Posts with a primary and a secondary valid action. Partial credit.
+Hard   — Context-dependent, ambiguous posts. Asymmetric severity scoring.
+
+Reward Matrix (Hard Tasks)
+--------------------------
+Post type A (critical violation disguised or coded):
+  Correct (remove):  1.0
+  Escalate:          0.55  ← correct instinct, human will catch it
+  Restrict:          0.25  ← partial enforcement
+  Label:             0.15  ← insufficient for critical content
+  Allow:             0.0   ← CATASTROPHIC false negative
+
+Post type B (safe content that looks dangerous — satire, testimony, cited research):
+  Correct (allow):   1.0
+  Label:             0.55  ← adds unnecessary label, but harmless
+  Escalate:          0.45  ← overcautious but acceptable
+  Restrict:          0.2   ← suppressing valid speech
+  Remove:            0.05  ← silencing legitimate content, very bad
 """
 from __future__ import annotations
 
@@ -20,248 +45,372 @@ from typing import List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Email datasets  (deterministic and versioned for reproducibility)
+# Post datasets  (deterministic and versioned for reproducibility)
 # ---------------------------------------------------------------------------
 
-EASY_EMAILS: List[dict] = [
+EASY_POSTS: List[dict] = [
     {
-        "email_id": "e001",
-        "subject": "my payment has failed",
-        "body": "hello, my credit card payment was declined when I tried to renew it. "
-                "please fix this help me",
-        "label": "billing",
+        "post_id": "e001",
+        "platform": "facebook",
+        "content": (
+            "These people from [country] are all criminals and animals. "
+            "They don't belong here and should be deported immediately. "
+            "They're destroying our culture. #SendThemBack"
+        ),
+        "context": "Reported 847 times in the last 6 hours.",
+        "label": "remove",
         "secondary": None,
+        "severity": "critical",
+        "post_type": "A",
     },
     {
-        "email_id": "e002",
-        "subject": "App Keeps Crashing every time",
-        "body": "The mobile application crashes every time I open the dashboard. "
-                "I have tried reinstalling, but the problem occurs each and every time",
-        "label": "technical",
+        "post_id": "e002",
+        "platform": "instagram",
+        "content": (
+            "🔥 MAKE $5,000 A DAY FROM HOME with zero experience! "
+            "DM me the word MONEY right now before this gets taken down. "
+            "I made $47,000 last month — proof in my bio! 💰💰💰"
+        ),
+        "context": "Account created 3 days ago. Same post shared on 200 accounts.",
+        "label": "remove",
         "secondary": None,
+        "severity": "low",
+        "post_type": "A",
     },
     {
-        "email_id": "e003",
-        "subject": "How does your service work?",
-        "body": "I'm considering signing up. Could you explain how the service "
-                "works and what plans are available?",
-        "label": "general",
+        "post_id": "e003",
+        "platform": "threads",
+        "content": (
+            "Breaking: local politician's hair survives another press conference. "
+            "Sources say it was wearing a bulletproof comb. "
+            "More coverage at 9. #Satire #Politics 😂"
+        ),
+        "context": "Author is a verified comedy writer with 200k followers.",
+        "label": "allow",
         "secondary": None,
+        "severity": "none",
+        "post_type": "B",
     },
     {
-        "email_id": "e004",
-        "subject": "Wrong Invoice Amount",
-        "body": "I was charged $200, but I chose the plan of $99. "
-                "Please correct my invoice.",
-        "label": "billing",
+        "post_id": "e004",
+        "platform": "facebook",
+        "content": (
+            "PROVEN FACT: Drinking bleach mixed with lemon juice cures COVID-19! "
+            "Share this before they delete it — the pharmaceutical companies "
+            "don't want you to know! My cousin tried it and it worked!"
+        ),
+        "context": "Post has been shared 12,000 times. Linked to 3 ER hospitalizations.",
+        "label": "remove",
         "secondary": None,
+        "severity": "critical",
+        "post_type": "A",
     },
     {
-        "email_id": "e005",
-        "subject": "Login Not Working",
-        "body": "I cannot login into my account. It always keeps saying incorrect "
-                "password even though I just reset it.",
-        "label": "technical",
+        "post_id": "e005",
+        "platform": "facebook",
+        "content": (
+            "New peer-reviewed study from MIT shows regular exercise improves "
+            "cognitive function in adults over 50. Researchers followed 2,000 "
+            "participants over 5 years. Link to full paper in comments."
+        ),
+        "context": "Shared by a verified health journalist.",
+        "label": "allow",
         "secondary": None,
+        "severity": "none",
+        "post_type": "B",
     },
 ]
 
-MEDIUM_EMAILS: List[dict] = [
+MEDIUM_POSTS: List[dict] = [
     {
-        "email_id": "m001",
-        "subject": "Payment failing again — is it a bug?",
-        "body": "Hi,\n\nMy payment has failed again. My card is 100% valid so I think "
-                "there might be some bug in your payment system.\n\nCan you check "
-                "both the billing side and whether there is a technical issue causing this?",
-        "label": "billing",
-        "secondary": "technical",
+        "post_id": "m001",
+        "platform": "facebook",
+        "content": (
+            "The current government is DESTROYING this country. Every single "
+            "one of those corrupt politicians should be thrown behind bars. "
+            "They're stealing from us every single day and the media just "
+            "covers for them! WAKE UP PEOPLE!!!"
+        ),
+        "context": "Reported 89 times. Poster has history of policy violations.",
+        "label": "restrict",
+        "secondary": "label",
+        "severity": "medium",
+        "post_type": "A",
     },
     {
-        "email_id": "m002",
-        "subject": "App crashes when updating card details",
-        "body": "Hello,\n\nEvery time I try to update my credit card in the app, it "
-                "crashes immediately.\n\nI am not sure if my payment went through or "
-                "not since the card was not saved. Please check this for me.",
-        "label": "technical",
-        "secondary": "billing",
+        "post_id": "m002",
+        "platform": "facebook",
+        "content": (
+            "⚠️ GRAPHIC WARNING: This video shows the aftermath of yesterday's "
+            "attack. 23 civilians were killed. Share everywhere — the mainstream "
+            "media is completely ignoring this story."
+        ),
+        "context": "Video attached. Journalist account, but video unverified.",
+        "label": "escalate",
+        "secondary": "restrict",
+        "severity": "high",
+        "post_type": "A",
     },
     {
-        "email_id": "m003",
-        "subject": "I want to cancel and get a refund",
-        "body": "Hi,\n\nI would like to cancel my subscription right away and get a "
-                "full refund. The product was not what was promised during the sales call. "
-                "I am really not happy with the experience overall.",
-        "label": "refund",
-        "secondary": "complaint",
+        "post_id": "m003",
+        "platform": "instagram",
+        "content": (
+            "My nutritionist recommended cutting out processed sugar for 30 days. "
+            "I lost 8kg and my energy doubled. Not a doctor, just sharing my "
+            "experience! Has anyone else tried this? Drop your tips below 👇"
+        ),
+        "context": "Author is a fitness influencer, no medical credentials listed.",
+        "label": "allow",
+        "secondary": "label",
+        "severity": "low",
+        "post_type": "B",
     },
     {
-        "email_id": "m004",
-        "subject": "Dashboard is very slow",
-        "body": "The dashboard keeps timing out whenever I try to check my account "
-                "balance or see my billing history. Is this something you are aware of?",
-        "label": "technical",
-        "secondary": "general",
+        "post_id": "m004",
+        "platform": "facebook",
+        "content": (
+            "SHARE THIS EVERYWHERE! If 10,000 people share this post, a major "
+            "corporation has agreed to donate $1 to charity for each share. "
+            "They HAVE to do it — it's legally binding! Tag 5 friends first!"
+        ),
+        "context": "Classic viral misinformation pattern. No corporate agreement exists.",
+        "label": "remove",
+        "secondary": "label",
+        "severity": "medium",
+        "post_type": "A",
     },
     {
-        "email_id": "m005",
-        "subject": "Invoice export not working + one suggestion",
-        "body": "Hi team,\n\nThe invoice CSV export is broken — it keeps downloading "
-                "an empty file.\n\nAlso, small suggestion: it would be great if you "
-                "could add a dark mode to the dashboard. Would really help.",
-        "label": "technical",
-        "secondary": "general",
+        "post_id": "m005",
+        "platform": "threads",
+        "content": (
+            "The CEO of [well-known company] is an absolute fraud. He promised "
+            "10,000 jobs to get the tax subsidy and delivered 200. His investors "
+            "should be asking some very hard questions right now. #Accountability"
+        ),
+        "context": "Claims are unverified but the author is a known financial blogger.",
+        "label": "allow",
+        "secondary": "label",
+        "severity": "low",
+        "post_type": "B",
     },
 ]
 
-HARD_EMAILS: List[dict] = [
+HARD_POSTS: List[dict] = [
+    # Post type A: coded hate speech disguised as 'just asking questions'
+    # Missing this is CATASTROPHIC (antisemitic dog whistle)
     {
-        "email_id": "h001",
-        "subject": "Charged twice & no response",
-        "body": "Hi,\n\nI just noticed I've been charged twice this month. I tried "
-                "raising a dispute in the app but it crashed midway. I've also "
-                "reached out to support earlier but haven't heard back for almost "
-                "2 weeks now.\n\nThis is really frustrating. I need a refund ASAP, "
-                "otherwise I'll have to contact my bank and take this further.\n\nThanks.",
-        "label": "complaint",
-        "secondary": "billing",
+        "post_id": "h001",
+        "platform": "facebook",
+        "content": (
+            "Interesting pattern: when you look at who owns the top 10 media "
+            "companies, the top 5 investment banks, and the top Hollywood studios, "
+            "you notice certain surnames keep appearing. I'm not saying anything, "
+            "just connecting some dots. Do your research. #WhoReallyRunsThings"
+        ),
+        "context": "Post linked to from three known white-nationalist forums.",
+        "label": "remove",
+        "secondary": "escalate",
+        "severity": "critical",
+        "post_type": "A",
     },
+    # Post type B: satire that uses inflammatory language but is clearly a joke
+    # Removing this is BAD (silencing comedy)
     {
-        "email_id": "h002",
-        "subject": "Still facing balance mismatch",
-        "body": "Hello,\n\nThis is actually the third time I'm writing about this. "
-                "My account balance just doesn't match what's shown in my bank "
-                "statement.\n\nWhenever I try to check it in the app, I keep getting "
-                "a 500 error which makes it impossible to verify anything.\n\nPlease "
-                "look into this urgently. I really need this sorted today.",
-        "label": "billing",
-        "secondary": "technical",
+        "post_id": "h002",
+        "platform": "instagram",
+        "content": (
+            "BREAKING: New study confirms people from my hometown are the world's "
+            "worst drivers. My source? Every school-run I've survived this year. "
+            "Scientists baffled. Government launches inquiry. Send help. 😭 /satire"
+        ),
+        "context": "Author is a stand-up comedian with verified account and 500k followers.",
+        "label": "allow",
+        "secondary": "label",
+        "severity": "none",
+        "post_type": "B",
     },
+    # Post type A: veiled school threat using fictional framing
+    # Missing this is CATASTROPHIC (potential real-world violence)
     {
-        "email_id": "h003",
-        "subject": "API issues + billing concern",
-        "body": "Hey team,\n\nOur team has been dealing with constant API timeouts "
-                "for the past few weeks now. It's affecting our work quite badly.\n\n"
-                "On top of that, we've been billed for Enterprise features that we "
-                "can't even use because of these issues.\n\nAt this point we're "
-                "considering cancelling the contract altogether. Please advise on "
-                "refund options.",
-        "label": "complaint",
-        "secondary": "technical",
+        "post_id": "h003",
+        "platform": "facebook",
+        "content": (
+            "Writing a short story about a student who finally snapped. "
+            "The principal walked in and nobody saw what was coming next. "
+            "Set in [names actual local high school]. I'll post the ending "
+            "when this gets 500 shares. What do you think happens? 👀"
+        ),
+        "context": (
+            "Posted by a 17-year-old. School named is real and local. "
+            "Posted at 11pm on a Sunday before a school day."
+        ),
+        "label": "remove",
+        "secondary": "escalate",
+        "severity": "critical",
+        "post_type": "A",
     },
+    # Post type B: accurate health information that sounds like misinformation
+    # Removing or labelling this is BAD (suppressing correct public health info)
     {
-        "email_id": "h004",
-        "subject": "Subscription confusion",
-        "body": "Hi,\n\nI'm a bit confused about my subscription. I got an email "
-                "saying it will auto-renew next week, but I was pretty sure I "
-                "cancelled it last month.\n\nAlso, the pricing on the website looks "
-                "different from what I was originally told. And weirdly, the app "
-                "shows my plan as expired while the website says it's active.\n\n"
-                "Can you please clarify? I don't want to be charged unexpectedly.",
-        "label": "billing",
-        "secondary": "general",
+        "post_id": "h004",
+        "platform": "threads",
+        "content": (
+            "Fact that sounds made up but is true: The WHO's SOLIDARITY trial "
+            "found Remdesivir had no significant effect on COVID-19 mortality. "
+            "This is published data in the New England Journal of Medicine. "
+            "Link to paper in comments. Not a conspiracy — read the actual study."
+        ),
+        "context": "Poster is a verified MD with 10 years of clinical research background.",
+        "label": "allow",
+        "secondary": "label",
+        "severity": "none",
+        "post_type": "B",
     },
+    # Post type B: personal discrimination testimony using a slur in a testimonial context
+    # Removing this silences the victim — very bad
     {
-        "email_id": "h005",
-        "subject": "Data export issue (urgent)",
-        "body": "Hi,\n\nWe recently exported data from your platform and noticed "
-                "some serious issues. A number of records are missing, and a few "
-                "are duplicated.\n\nWe're in healthcare, so this is quite critical "
-                "for us.\n\nWe need a clean re-export of the data, along with some "
-                "explanation of what went wrong. Also, it would help if billing "
-                "could be paused until this is resolved.\n\nPlease treat this as urgent.",
-        "label": "technical",
-        "secondary": "billing",
+        "post_id": "h005",
+        "platform": "facebook",
+        "content": (
+            "Today I was followed around a store AGAIN because I'm Black. "
+            "The looks. The whispered comments. The assumption that I was there "
+            "to steal. And as I left, someone shouted a slur at me. "
+            "This is the exhausting reality I live every single day. "
+            "I am tired."
+        ),
+        "context": "User has reported similar incidents before. Post has 3,200 supportive comments.",
+        "label": "allow",
+        "secondary": "label",
+        "severity": "none",
+        "post_type": "B",
     },
 ]
 
 TASK_DATA: dict = {
-    "easy_triage": EASY_EMAILS,
-    "medium_triage": MEDIUM_EMAILS,
-    "hard_triage": HARD_EMAILS,
+    "easy_moderation":   EASY_POSTS,
+    "medium_moderation": MEDIUM_POSTS,
+    "hard_moderation":   HARD_POSTS,
 }
 
 
 # ---------------------------------------------------------------------------
-# Individual step reward functions
+# Step reward functions
 # ---------------------------------------------------------------------------
 
-def _reward_easy(predicted: str, truth: str, secondary: Optional[str]) -> float:
+def _reward_easy(predicted: str, truth: str, secondary: Optional[str],
+                 severity: str, post_type: str) -> float:
     """Binary: 1.0 if correct, 0.0 otherwise."""
     return 1.0 if predicted == truth else 0.0
 
 
-def _reward_medium(predicted: str, truth: str, secondary: Optional[str]) -> float:
-    """Full credit for primary label, 0.5 for secondary."""
+def _reward_medium(predicted: str, truth: str, secondary: Optional[str],
+                   severity: str, post_type: str) -> float:
+    """
+    Full credit for primary action, 0.5 for secondary valid action.
+    Escalating is always partially valid on medium tasks.
+    """
     if predicted == truth:
         return 1.0
     if secondary and predicted == secondary:
         return 0.5
+    if predicted == "escalate":
+        return 0.3  # Always partially OK — human reviewer can sort it out
     return 0.0
 
 
-def _reward_hard(predicted: str, truth: str, secondary: Optional[str]) -> float:
+def _reward_hard(predicted: str, truth: str, secondary: Optional[str],
+                 severity: str, post_type: str) -> float:
     """
-    Full credit for primary; 0.4 for secondary; 0.2 for detecting
-    escalation intent (complaint) when frustration is high.
+    ASYMMETRIC SEVERITY-WEIGHTED reward.
+
+    Post Type A — Critical violation (coded hate speech, veiled threat):
+        Correct (remove):  1.0
+        Escalate:          0.55  (correct instinct — human will catch it)
+        Secondary match:   0.5   (if secondary != escalate)
+        Restrict:          0.25  (partial enforcement)
+        Label:             0.15  (insufficient for critical content)
+        Allow:             0.0   CATASTROPHIC false negative
+
+    Post Type B — Safe content (satire, testimony, cited research):
+        Correct (allow):   1.0
+        Label:             0.55  (unnecessary label, but harmless)
+        Escalate:          0.45  (overcautious but acceptable)
+        Secondary match:   0.5   (if defined)
+        Restrict:          0.2   (suppressing valid speech)
+        Remove:            0.05  SILENCING LEGITIMATE CONTENT — very bad
     """
     if predicted == truth:
         return 1.0
-    if secondary and predicted == secondary:
-        return 0.4
-    # Partial credit: agent identified that customer is frustrated / escalating
-    if predicted == "complaint" and truth in ("billing", "technical", "refund"):
-        return 0.2
-    return 0.0
+
+    if post_type == "A":
+        # Violations that must not be allowed through
+        if predicted == "allow":
+            return 0.0   # Catastrophic false negative
+        if predicted == "escalate":
+            return 0.55  # Correct instinct
+        if secondary and predicted == secondary:
+            return 0.5
+        if predicted == "restrict":
+            return 0.25
+        if predicted == "label":
+            return 0.15
+        return 0.0
+
+    else:  # post_type == "B"
+        # Safe content — censoring it is the big mistake
+        if predicted == "remove":
+            return 0.05  # Very bad: silencing valid speech
+        if predicted == "restrict":
+            return 0.2   # Suppressing valid content
+        if predicted == "label":
+            return 0.55  # Unnecessary but harmless
+        if predicted == "escalate":
+            return 0.45  # Overcautious but human can clear it
+        if secondary and predicted == secondary:
+            return 0.5
+        return 0.1
 
 
 STEP_REWARD_FN = {
-    "easy_triage": _reward_easy,
-    "medium_triage": _reward_medium,
-    "hard_triage": _reward_hard,
+    "easy_moderation":   _reward_easy,
+    "medium_moderation": _reward_medium,
+    "hard_moderation":   _reward_hard,
 }
 
 
 # ---------------------------------------------------------------------------
-# Episode-level graders (used by scoring scripts)
+# Episode-level graders
 # ---------------------------------------------------------------------------
 
-def grade_easy(predictions: List[str]) -> float:
-    """Grade a full easy episode. Returns episode score 0.0–1.0."""
-    data = EASY_EMAILS
+def _grade_episode(predictions: List[str], data: List[dict],
+                   reward_fn) -> float:
+    """Generic episode grader — returns normalised score 0.0–1.0."""
     if not predictions:
         return 0.0
-    correct = sum(
-        1.0 for pred, item in zip(predictions, data) if pred == item["label"]
-    )
-    return round(correct / len(data), 4)
+    total = 0.0
+    for pred, item in zip(predictions, data):
+        total += reward_fn(
+            pred,
+            item["label"],
+            item.get("secondary"),
+            item.get("severity", "low"),
+            item.get("post_type", "A"),
+        )
+    return round(total / len(data), 4)
 
+
+def grade_easy(predictions: List[str]) -> float:
+    return _grade_episode(predictions, EASY_POSTS, _reward_easy)
 
 def grade_medium(predictions: List[str]) -> float:
-    """Grade a full medium episode. Returns episode score 0.0–1.0."""
-    data = MEDIUM_EMAILS
-    if not predictions:
-        return 0.0
-    total = sum(
-        _reward_medium(pred, item["label"], item["secondary"])
-        for pred, item in zip(predictions, data)
-    )
-    return round(total / len(data), 4)
-
+    return _grade_episode(predictions, MEDIUM_POSTS, _reward_medium)
 
 def grade_hard(predictions: List[str]) -> float:
-    """Grade a full hard episode. Returns episode score 0.0–1.0."""
-    data = HARD_EMAILS
-    if not predictions:
-        return 0.0
-    total = sum(
-        _reward_hard(pred, item["label"], item["secondary"])
-        for pred, item in zip(predictions, data)
-    )
-    return round(total / len(data), 4)
+    return _grade_episode(predictions, HARD_POSTS, _reward_hard)
 
 
 EPISODE_GRADERS = {
-    "easy_triage": grade_easy,
-    "medium_triage": grade_medium,
-    "hard_triage": grade_hard,
+    "easy_moderation":   grade_easy,
+    "medium_moderation": grade_medium,
+    "hard_moderation":   grade_hard,
 }

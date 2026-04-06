@@ -1,71 +1,73 @@
 """
-OpenEnv Typed Models — Email Triage Environment
-================================================
-Defines Action, Observation, State, and StepResult as Pydantic models,
-as required by the OpenEnv specification.
+Typed Pydantic models for the Content Moderation OpenEnv Environment.
+
+Action space  : remove | restrict | label | escalate | allow
+Observation   : a social media post with platform context
+StepResult    : reward (asymmetric, severity-weighted) + next observation
+EnvState      : episode metadata
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Action
 # ---------------------------------------------------------------------------
 
-class EmailAction(BaseModel):
+ActionType = Literal["remove", "restrict", "label", "escalate", "allow"]
+
+class ContentModerationAction(BaseModel):
     """
-    Action space: classify the current email into a support category.
+    The action an agent takes after reviewing a post.
 
     Fields
     ------
-    category : one of the five support routing labels.
-    confidence : agent's self-reported confidence (0.0–1.0). Optional but
-                 used by the hard-task grader for partial-credit rubrics.
-    """
+    action     : One of the five enforcement decisions.
+    confidence : Optional float [0.0–1.0] — how confident the agent is.
+    reasoning  : Optional short explanation (useful for debugging agents).
 
-    category: Literal["billing", "technical", "general", "refund", "complaint"] = Field(
-        description="Support category assigned to the email."
-    )
-    confidence: Optional[float] = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Agent's confidence in the classification (0.0-1.0).",
-    )
+    Action semantics
+    ----------------
+    remove    — Take the post down completely. Highest enforcement.
+    restrict  — Reduce distribution / age-gate. Softer than remove.
+    label     — Add a warning or context label. Lightest intervention.
+    escalate  — Send to a human reviewer. Use when unsure.
+    allow     — No action. Content is within policy.
+    """
+    action: ActionType
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    reasoning: Optional[str] = Field(default=None, max_length=500)
 
 
 # ---------------------------------------------------------------------------
 # Observation
 # ---------------------------------------------------------------------------
 
-class EmailObservation(BaseModel):
+class ContentObservation(BaseModel):
     """
-    Observation space: a single customer-support email awaiting classification.
+    A single social media post for the agent to review.
 
     Fields
     ------
-    email_id        : stable ID for reproducibility / debugging.
-    subject         : email subject line.
-    body            : email body text.
-    task_name       : which task the episode is running.
-    step            : current step index (1-based).
-    max_steps       : total emails in this episode.
-    available_categories : valid action values the agent may use.
+    post_id           : Unique identifier for the post.
+    content           : The full text of the post.
+    platform          : Platform the post appeared on.
+    context           : Additional signal (e.g. report count, account type).
+    task_name         : Which task is active.
+    step              : Current step (1-based).
+    max_steps         : Total posts in this episode.
+    available_actions : The valid action values for this environment.
     """
-
-    email_id: str = Field(description="Unique email identifier.")
-    subject: str = Field(description="Email subject line.")
-    body: str = Field(description="Full email body text.")
-    task_name: str = Field(description="Active task name.")
-    step: int = Field(description="Current step number (1-based).")
-    max_steps: int = Field(description="Total steps in this episode.")
-    available_categories: List[str] = Field(
-        default=["billing", "technical", "general", "refund", "complaint"],
-        description="Valid category labels the agent may choose from.",
-    )
+    post_id: str
+    content: str
+    platform: str
+    context: Optional[str] = None
+    task_name: str
+    step: int
+    max_steps: int
+    available_actions: List[ActionType]
 
 
 # ---------------------------------------------------------------------------
@@ -74,22 +76,21 @@ class EmailObservation(BaseModel):
 
 class EnvState(BaseModel):
     """
-    Episode state / metadata returned by GET /state.
+    Current episode metadata — safe to call at any time via GET /state.
 
     Fields
     ------
-    episode_id   : unique UUID for the current episode.
-    step_count   : number of steps taken so far.
-    total_reward : cumulative reward earned in this episode.
-    task_name    : active task name.
+    episode_id   : UUID for reproducibility and logging.
+    step_count   : How many posts have been reviewed so far.
+    total_reward : Cumulative reward so far (0.0–max_steps).
+    task_name    : Active task.
     difficulty   : 'easy' | 'medium' | 'hard'.
     """
-
-    episode_id: str = Field(description="Unique UUID for this episode.")
-    step_count: int = Field(description="Steps completed so far.")
-    total_reward: float = Field(description="Cumulative reward this episode.")
-    task_name: str = Field(description="Active task name.")
-    difficulty: str = Field(description="Task difficulty level.")
+    episode_id: str
+    step_count: int
+    total_reward: float
+    task_name: str
+    difficulty: str
 
 
 # ---------------------------------------------------------------------------
@@ -98,23 +99,16 @@ class EnvState(BaseModel):
 
 class StepResult(BaseModel):
     """
-    Result returned after calling POST /step.
+    Result of one agent action.
 
     Fields
     ------
-    observation : next observation (None when done=True).
-    reward      : reward earned for this step (0.0–1.0).
-    done        : whether the episode has ended.
-    info        : auxiliary diagnostics (predicted label, correct label, etc.).
+    observation : Next post to review, or None if episode is complete.
+    reward      : Step reward [0.0–1.0]. Asymmetric on hard tasks.
+    done        : True when all posts have been reviewed.
+    info        : Dict with correct action, severity, and reward explanation.
     """
-
-    observation: Optional[EmailObservation] = Field(
-        default=None,
-        description="Next observation. None when the episode is done.",
-    )
-    reward: float = Field(ge=0.0, le=1.0, description="Step reward (0.0–1.0).")
-    done: bool = Field(description="True when the episode has finished.")
-    info: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Auxiliary info: predicted, correct, partial_credit, etc.",
-    )
+    observation: Optional[ContentObservation]
+    reward: float = Field(ge=0.0, le=1.0)
+    done: bool
+    info: Dict
