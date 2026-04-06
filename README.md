@@ -1,3 +1,13 @@
+---
+title: Content Moderation OpenEnv
+emoji: 🛡️
+colorFrom: red
+colorTo: orange
+sdk: docker
+pinned: false
+license: mit
+---
+
 # Content Moderation OpenEnv
 
 > **Meta × HuggingFace OpenEnv Hackathon** — Team AlgoRythms
