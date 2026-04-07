@@ -135,8 +135,8 @@ def run_episode(client: OpenAI, task_name: str) -> float:
     total_reward = 0.0
     step = 0
 
-    # Required structured log: START
-    print(f"START task={task_name} session={session_id} max_steps={max_steps}")
+    # Required structured log: START (flush=True prevents Docker stdout buffering)
+    print(f"START task={task_name} session={session_id} max_steps={max_steps}", flush=True)
 
     while True:
         step += 1
@@ -160,17 +160,16 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         total_reward += reward
 
         # Required structured log: STEP
-        print(f"STEP step={step} action={action_str} reward={reward:.4f} correct={info.get('correct_action', 'unknown')}")
+        print(f"STEP step={step} action={action_str} reward={reward:.4f} correct={info.get('correct_action', 'unknown')}", flush=True)
 
         if done:
             break
 
         obs = result.get("observation", {})
-        time.sleep(0.3)
 
     episode_score = round(total_reward / max_steps, 4)
     # Required structured log: END
-    print(f"END task={task_name} score={episode_score:.4f} total_reward={total_reward:.4f} steps={step}")
+    print(f"END task={task_name} score={episode_score:.4f} total_reward={total_reward:.4f} steps={step}", flush=True)
     return episode_score
 
 
