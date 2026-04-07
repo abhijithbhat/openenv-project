@@ -191,6 +191,19 @@ async def state(session_id: Optional[str] = Query(default=None)) -> EnvState:
         raise HTTPException(500, detail=str(exc)) from exc
 
 
+@app.get("/", summary="Root — liveness check")
+async def root():
+    """Root endpoint — returns 200 so automated validators don't get a 404."""
+    return {
+        "status": "ok",
+        "name": "ContentGuard — Content Moderation OpenEnv",
+        "version": "2.0.0",
+        "docs": "/docs",
+        "health": "/health",
+        "tasks": "/tasks",
+    }
+
+
 @app.get("/health", summary="Liveness probe")
 async def health():
     return {
