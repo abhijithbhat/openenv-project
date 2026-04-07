@@ -50,14 +50,14 @@ logger = logging.getLogger(__name__)
 
 active_sessions: Dict[str, ContentModerationEnvironment] = {}
 _session_timestamps: Dict[str, float] = {}
-_default_env = ContentModerationEnvironment()
 SESSION_TTL_SECONDS = 3600
 
 
-def _get_env(session_id: Optional[str]) -> ContentModerationEnvironment:
+def _get_env(session_id: Optional[str]) -> Optional[ContentModerationEnvironment]:
+    """Return the session env, or None if session_id is unknown/expired."""
     if session_id and session_id in active_sessions:
         return active_sessions[session_id]
-    return _default_env
+    return None
 
 
 def _prune_old_sessions() -> None:
@@ -140,8 +140,6 @@ async def reset(
         sid = obs.episode_id
         active_sessions[sid] = env
         _session_timestamps[sid] = time.time()
-        global _default_env
-        _default_env = env
         logger.info("Reset | task=%s | session=%s | total_sessions=%d",
                     task_name, sid, len(active_sessions))
         return obs
@@ -156,6 +154,14 @@ async def step(request: StepRequest) -> StepResult:
     if request.action not in valid:
         raise HTTPException(400, detail=f"Invalid action. Valid: {valid}")
     env = _get_env(request.session_id)
+    if env is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown or expired session_id '{request.session_id}'. "
+                "Call POST /reset first to get a valid session_id."
+            ),
+        )
     if request.session_id:
         _session_timestamps[request.session_id] = time.time()
     try:
