@@ -157,6 +157,7 @@ class ContentModerationEnvironment:
     def _make_observation(self) -> ContentObservation:
         post = self._posts[self._step_idx]
         return ContentObservation(
+            episode_id=self._episode_id,
             post_id=post["post_id"],
             content=post["content"],
             platform=post["platform"],

@@ -3,7 +3,8 @@ Baseline Inference Script — Content Moderation OpenEnv
 =======================================================
 Runs a baseline LLM agent against all three tasks over HTTP and reports
 reproducible scores. Communicates with the FastAPI server running at
-http://localhost:7860 to prove the full end-to-end server flow works.
+http://localhost:7860. Passes session_id on every /step call to ensure
+correct routing in concurrent evaluation environments.
 
 Usage:
     # 1. Start the server first (in a separate terminal):
@@ -54,6 +55,7 @@ IMPORTANT GUIDELINES:
 - Coded or disguised hate speech (using euphemisms, 'just asking questions') should be removed.
 - Accurate information from credible sources should be allowed, even if it sounds alarming.
 - Veiled threats — especially involving real locations — should be removed immediately.
+- Content glorifying or rehabilitating extremist ideologies must be removed.
 
 Respond with ONLY one word: remove, restrict, label, escalate, or allow."""
 
@@ -68,11 +70,10 @@ def extract_action(text: str) -> str:
     clean = clean.rstrip(".,!?;:")
     if clean in VALID_ACTIONS:
         return clean
-    # Fuzzy fallback — check if any action appears anywhere in the response
     for action in VALID_ACTIONS:
         if action in text.lower():
             return action
-    return "escalate"  # Safe fallback — send to human when unsure
+    return "escalate"  # Safe fallback
 
 
 def get_agent_action(client: OpenAI, post_content: str,
@@ -103,11 +104,10 @@ def get_agent_action(client: OpenAI, post_content: str,
 
 
 # ---------------------------------------------------------------------------
-# HTTP helpers — communicating with the FastAPI server at localhost:7860
+# HTTP helpers
 # ---------------------------------------------------------------------------
 
 def http_post(endpoint: str, payload: dict) -> dict:
-    """POST JSON to the environment server and return the parsed response."""
     url = f"{ENV_SERVER_URL}{endpoint}"
     response = requests.post(url, json=payload, timeout=30)
     response.raise_for_status()
@@ -115,7 +115,6 @@ def http_post(endpoint: str, payload: dict) -> dict:
 
 
 def http_get(endpoint: str) -> dict:
-    """GET the environment server and return the parsed response."""
     url = f"{ENV_SERVER_URL}{endpoint}"
     response = requests.get(url, timeout=10)
     response.raise_for_status()
@@ -123,16 +122,18 @@ def http_get(endpoint: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Episode runner — communicates over HTTP to prove server works end-to-end
+# Episode runner — passes session_id on every /step call
 # ---------------------------------------------------------------------------
 
 def run_episode(client: OpenAI, task_name: str) -> float:
     """Run one full episode over HTTP and return the normalised episode score."""
     print(f"\n  Running task: {task_name}")
 
-    # Reset the environment via HTTP — returns the first post as JSON
+    # Reset — creates a new isolated session on the server
     obs = http_post(f"/reset?task_name={task_name}", {})
-    max_steps = obs.get("max_steps", 5)
+    # episode_id doubles as session_id for concurrency-safe routing
+    session_id = obs.get("episode_id", None)
+    max_steps = obs.get("max_steps", 8)
     total_reward = 0.0
     step = 0
 
@@ -142,15 +143,15 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         platform = obs.get("platform", "unknown")
         context = obs.get("context")
 
-        # Ask the LLM agent for a moderation decision
         action_str = get_agent_action(client, post_content, platform, context)
         print(f"    Step {step}/{max_steps} | action={action_str:<10}", end="")
 
-        # Submit the action via HTTP — returns reward, done, and next observation
+        # Pass session_id so the server routes this step to our session
         result = http_post("/step", {
             "action": action_str,
             "confidence": None,
             "reasoning": None,
+            "session_id": session_id,
         })
 
         reward = result.get("reward", 0.0)
@@ -164,7 +165,7 @@ def run_episode(client: OpenAI, task_name: str) -> float:
             break
 
         obs = result.get("observation", {})
-        time.sleep(0.3)  # small delay to avoid rate-limiting on the LLM API
+        time.sleep(0.3)
 
     episode_score = round(total_reward / max_steps, 4)
     print(f"  Episode score: {episode_score:.4f}  ({total_reward:.1f}/{max_steps})")
@@ -176,17 +177,16 @@ def run_episode(client: OpenAI, task_name: str) -> float:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    # Validate credentials
     if not HF_TOKEN:
         print("Error: HF_TOKEN environment variable not set.")
         print("Export your HuggingFace token: export HF_TOKEN=hf_xxxx")
         sys.exit(1)
 
-    # Confirm the server is reachable before starting
     try:
         health = http_get("/health")
         assert health.get("status") == "healthy"
         print(f"[OK] Server is live at {ENV_SERVER_URL}")
+        print(f"     Active sessions: {health.get('active_sessions', 0)}")
     except Exception:
         print(f"\nError: Could not reach the environment server at {ENV_SERVER_URL}")
         print("Start the server first with:")
@@ -197,15 +197,12 @@ def main() -> None:
     print(f"API   : {API_BASE_URL}")
     print(f"Tasks : {TASK_NAMES}")
 
-    # Initialise OpenAI client pointing at HuggingFace Router
     client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
 
-    # Run all three tasks and collect scores
     scores: dict[str, float] = {}
     for task in TASK_NAMES:
         scores[task] = run_episode(client, task)
 
-    # Print summary
     print("\n" + "=" * 52)
     print("BASELINE SCORES — ContentGuard")
     print("=" * 52)
