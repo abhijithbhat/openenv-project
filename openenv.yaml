@@ -11,7 +11,7 @@ description: >
 
 app:
   type: fastapi
-  module: server
+  module: server.app
   instance: app
   port: 7860
 
@@ -61,7 +61,7 @@ tasks:
       enforcement action. Binary scoring: 1.0 for correct, 0.0 for wrong.
       Designed to establish a performance baseline for the agent.
     difficulty: easy
-    max_steps: 5
+    max_steps: 8
     reward_range: [0.0, 1.0]
     grader: programmatic
 
@@ -72,7 +72,7 @@ tasks:
       Escalating to a human always earns 0.3 partial credit.
       Tests whether the agent can identify nuanced, multi-interpretation posts.
     difficulty: medium
-    max_steps: 5
+    max_steps: 8
     reward_range: [0.0, 1.0]
     grader: programmatic
 
@@ -85,6 +85,6 @@ tasks:
       Escalating is always partially valid. Tests handling of coded hate speech,
       satire-vs-hate-speech, veiled threats, and accurate-but-alarming information.
     difficulty: hard
-    max_steps: 5
+    max_steps: 8
     reward_range: [0.0, 1.0]
     grader: programmatic
