@@ -68,9 +68,8 @@ class ContentModerationEnvironment:
 
         self._episode_id = str(uuid.uuid4())
         self._task_name = task_name
-        # Shuffle posts so each episode feels different
+        # Deterministic order — required for reproducible baseline scores
         self._posts = list(TASK_DATA[task_name])
-        random.shuffle(self._posts)
         self._step_idx = 0
         self._total_reward = 0.0
         self._started = True

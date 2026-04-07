@@ -155,13 +155,20 @@ async def step(request: StepRequest) -> StepResult:
         raise HTTPException(400, detail=f"Invalid action. Valid: {valid}")
     env = _get_env(request.session_id)
     if env is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unknown or expired session_id '{request.session_id}'. "
-                "Call POST /reset first to get a valid session_id."
-            ),
-        )
+        # Fallback: if exactly one session is active and no session_id was provided,
+        # route to it automatically. Handles evaluators that don't track session_id.
+        if request.session_id is None and len(active_sessions) == 1:
+            only_sid = next(iter(active_sessions))
+            env = active_sessions[only_sid]
+            request.session_id = only_sid
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown or expired session_id '{request.session_id}'. "
+                    "Call POST /reset first to get a valid session_id."
+                ),
+            )
     if request.session_id:
         _session_timestamps[request.session_id] = time.time()
     try:
