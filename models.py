@@ -60,6 +60,9 @@ class ContentObservation(BaseModel):
     max_steps         : Total posts in this episode.
     available_actions : The valid action values for this environment.
     """
+    episode_id: str = Field(
+        description="Session identifier — pass this back to /step as session_id for concurrency-safe routing."
+    )
     post_id: str
     content: str
     platform: str
