@@ -31,7 +31,8 @@ from openai import OpenAI
 
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
-HF_TOKEN: str = os.getenv("HF_TOKEN", "")
+HF_TOKEN: str = os.getenv("HF_TOKEN")           # No default — must be set explicitly
+LOCAL_IMAGE_NAME: str = os.getenv("LOCAL_IMAGE_NAME")  # Optional — only needed for from_docker_image()
 ENV_SERVER_URL: str = os.getenv("ENV_SERVER_URL", "http://localhost:7860")
 TEMPERATURE: float = 0.0   # deterministic for reproducibility
 MAX_TOKENS: int = 20       # we only need one word
@@ -127,15 +128,15 @@ def http_get(endpoint: str) -> dict:
 
 def run_episode(client: OpenAI, task_name: str) -> float:
     """Run one full episode over HTTP and return the normalised episode score."""
-    print(f"\n  Running task: {task_name}")
-
     # Reset — creates a new isolated session on the server
     obs = http_post(f"/reset?task_name={task_name}", {})
-    # episode_id doubles as session_id for concurrency-safe routing
     session_id = obs.get("episode_id", None)
     max_steps = obs.get("max_steps", 8)
     total_reward = 0.0
     step = 0
+
+    # Required structured log: START
+    print(f"START task={task_name} session={session_id} max_steps={max_steps}")
 
     while True:
         step += 1
@@ -144,7 +145,6 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         context = obs.get("context")
 
         action_str = get_agent_action(client, post_content, platform, context)
-        print(f"    Step {step}/{max_steps} | action={action_str:<10}", end="")
 
         # Pass session_id so the server routes this step to our session
         result = http_post("/step", {
@@ -159,7 +159,8 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         info = result.get("info", {})
         total_reward += reward
 
-        print(f"| reward={reward:.2f} | correct={info.get('correct_action', '?')}")
+        # Required structured log: STEP
+        print(f"STEP step={step} action={action_str} reward={reward:.4f} correct={info.get('correct_action', 'unknown')}")
 
         if done:
             break
@@ -168,7 +169,8 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         time.sleep(0.3)
 
     episode_score = round(total_reward / max_steps, 4)
-    print(f"  Episode score: {episode_score:.4f}  ({total_reward:.1f}/{max_steps})")
+    # Required structured log: END
+    print(f"END task={task_name} score={episode_score:.4f} total_reward={total_reward:.4f} steps={step}")
     return episode_score
 
 
@@ -178,8 +180,8 @@ def run_episode(client: OpenAI, task_name: str) -> float:
 
 def main() -> None:
     if not HF_TOKEN:
-        print("Error: HF_TOKEN environment variable not set.")
-        print("Export your HuggingFace token: export HF_TOKEN=hf_xxxx")
+        print("ERROR: HF_TOKEN environment variable not set.")
+        print("Run: export HF_TOKEN=hf_xxxx")
         sys.exit(1)
 
     try:
