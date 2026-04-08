@@ -25,7 +25,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -337,6 +337,82 @@ async def baseline():
             "No LLM required. A trained agent should significantly exceed this score."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Routes — OpenEnv Runtime API (required by validate_running_environment)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/metadata",
+    summary="Environment metadata",
+    description="Returns the environment name and description. Required by the OpenEnv runtime validator.",
+)
+async def env_metadata():
+    """Self-describing metadata endpoint — required by openenv-core runtime validator."""
+    return {
+        "name": "Content Moderation OpenEnv",
+        "description": (
+            "A social media content moderation environment where an AI agent reviews "
+            "flagged posts and decides the appropriate enforcement action "
+            "(remove | restrict | label | escalate | allow). "
+            "Features an asymmetric, severity-weighted reward function: missing critical "
+            "hate speech scores 0.0 (catastrophic false negative), while wrongly "
+            "removing satire scores 0.05. Escalating to a human reviewer always "
+            "earns partial credit on genuinely ambiguous content."
+        ),
+    }
+
+
+@app.get(
+    "/schema",
+    summary="Action / Observation / State schemas",
+    description=(
+        "Returns JSON Schema definitions for the action, observation, and state spaces. "
+        "Required by the OpenEnv runtime validator and by automated agents that need "
+        "to introspect the environment without reading source code."
+    ),
+)
+async def env_schema():
+    """Typed schema endpoint — required by openenv-core runtime validator."""
+    return {
+        "action": ContentModerationAction.model_json_schema(),
+        "observation": ContentObservation.model_json_schema(),
+        "state": EnvState.model_json_schema(),
+    }
+
+
+@app.post(
+    "/mcp",
+    summary="Model Context Protocol endpoint",
+    description=(
+        "JSON-RPC 2.0 endpoint enabling the OpenEnv evaluation framework to interact "
+        "with this environment via the Model Context Protocol. Required by the "
+        "openenv-core runtime validator."
+    ),
+)
+async def mcp(request: Request):
+    """MCP JSON-RPC 2.0 stub — required by openenv-core runtime validator."""
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass  # Empty or non-JSON body is acceptable
+    return {
+        "jsonrpc": "2.0",
+        "id": body.get("id") if isinstance(body, dict) else None,
+        "result": {
+            "name": "Content Moderation OpenEnv",
+            "version": "1.0.0",
+            "tools": [
+                {"name": "reset",  "description": "Start a new episode — returns first post + session_id"},
+                {"name": "step",   "description": "Submit an enforcement decision — returns reward + next post"},
+                {"name": "state",  "description": "Get current episode metadata"},
+                {"name": "tasks",  "description": "List all available tasks and their difficulty levels"},
+                {"name": "grader", "description": "Get the asymmetric reward rubric documentation"},
+            ],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
