@@ -6,6 +6,8 @@ colorTo: yellow
 sdk: docker
 pinned: false
 license: mit
+tags:
+  - openenv
 ---
 
 # Content Moderation OpenEnv
@@ -41,7 +43,7 @@ mistake you make* matters as much as *whether you make a mistake*.
 | **OpenEnv spec** | v1.0 — `step()` / `reset()` / `state()` |
 | **Action space** | Discrete: `remove`, `restrict`, `label`, `escalate`, `allow` |
 | **Observation** | Post content, platform, context signal, step metadata |
-| **Tasks** | 3 (easy → medium → hard), 5 posts each |
+| **Tasks** | 3 (easy → medium → hard), 8 posts each |
 | **Reward** | Asymmetric, severity-weighted (see Reward Design below) |
 | **Deployment** | HuggingFace Spaces (Docker), port 7860 |
 
