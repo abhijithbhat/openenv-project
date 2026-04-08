@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────
-#  Email Triage Environment — Dockerfile
+#  ContentGuard — Content Moderation OpenEnv — Dockerfile
 #  Runs the FastAPI server via uvicorn on port 7860.
 #  HuggingFace Spaces Docker SDK uses port 7860 by default.
 # ─────────────────────────────────────────────────────────
@@ -29,4 +29,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:7860/health || exit 1
 
 # Start the FastAPI server
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

@@ -201,6 +201,12 @@ async def step(request: StepRequest) -> StepResult:
             detail=f"Invalid action '{request.action}'. Valid actions: {valid_actions}",
         )
     env = _get_env(request.session_id)
+    # Smart fallback: if no session_id given but exactly 1 session active,
+    # auto-route to it (handles evaluators that don't track session_id)
+    if env is _default_env and request.session_id is None and len(active_sessions) == 1:
+        only_sid = next(iter(active_sessions))
+        env = active_sessions[only_sid]
+        request.session_id = only_sid
     if request.session_id:
         _session_timestamps[request.session_id] = time.time()
     try:
@@ -235,6 +241,19 @@ async def state(session_id: Optional[str] = Query(default=None)) -> EnvState:
         return env.state()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/", summary="Root — liveness check")
+async def root():
+    """Root endpoint — returns 200 so automated validators don't get a 404."""
+    return {
+        "status": "ok",
+        "name": "ContentGuard — Content Moderation OpenEnv",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health",
+        "tasks": "/tasks",
+    }
 
 
 @app.get("/health", summary="Health check")
@@ -318,3 +337,17 @@ async def baseline():
             "No LLM required. A trained agent should significantly exceed this score."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Entry point — required by [project.scripts] in pyproject.toml
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Entry point for openenv validate and direct execution."""
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=7860, workers=1)
+
+
+if __name__ == "__main__":
+    main()
