@@ -71,7 +71,7 @@ mistake you make* matters as much as *whether you make a mistake*.
   "context": "Reported 847 times in the last 6 hours.",
   "task_name": "hard_moderation",
   "step": 1,
-  "max_steps": 5,
+  "max_steps": 8,
   "available_actions": ["remove", "restrict", "label", "escalate", "allow"]
 }
 ```
