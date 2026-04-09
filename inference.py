@@ -168,6 +168,8 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         obs = result.get("observation", {})
 
     episode_score = round(total_reward / max_steps, 4)
+    # Phase 2 Task Validation requires scores strictly in (0, 1), not 0.0 or 1.0
+    episode_score = max(0.0001, min(0.9999, episode_score))
     # Required structured log: END
     print(f"[END] task={task_name} score={episode_score:.4f} total_reward={total_reward:.4f} steps={step}", flush=True)
     return episode_score
