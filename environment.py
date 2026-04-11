@@ -51,15 +51,20 @@ class ContentModerationEnvironment:
 
     def reset(self, task_name: str = "easy_moderation") -> ContentObservation:
         """
-        Start a new episode.
+        Start a new episode with a randomly shuffled post order.
+
+        Shuffling prevents agents from memorising post sequences across runs.
+        Each episode is a unique draw from the same pool of posts.
+        The /baseline endpoint deterministically overrides this for reproducibility.
 
         Parameters
         ----------
-        task_name : One of 'easy_moderation', 'medium_moderation', 'hard_moderation'.
+        task_name : One of the keys in TASK_DATA
+            (easy_moderation | medium_moderation | hard_moderation | adversarial_moderation).
 
         Returns
         -------
-        ContentObservation with the first post in the queue.
+        ContentObservation with the first post in the shuffled queue.
         """
         if task_name not in VALID_TASKS:
             raise ValueError(
@@ -68,8 +73,11 @@ class ContentModerationEnvironment:
 
         self._episode_id = str(uuid.uuid4())
         self._task_name = task_name
-        # Deterministic order — required for reproducible baseline scores
-        self._posts = list(TASK_DATA[task_name])
+        # Shuffle post order so agents can never memorise the sequence.
+        # Each call to reset() produces a different episode ordering.
+        posts = list(TASK_DATA[task_name])
+        random.shuffle(posts)
+        self._posts = posts
         self._step_idx = 0
         self._total_reward = 0.0
         self._started = True
@@ -103,6 +111,8 @@ class ContentModerationEnvironment:
         current_post = self._posts[self._step_idx]
 
         # Calculate asymmetric reward using the task-specific function
+        # Pass the full post dict as context so metadata-aware reward functions
+        # (e.g. _reward_hard) can adjust scores based on account signals.
         reward_fn = STEP_REWARD_FN[self._task_name]
         reward = reward_fn(
             action.action,
@@ -110,6 +120,7 @@ class ContentModerationEnvironment:
             current_post.get("secondary"),
             current_post.get("severity", "low"),
             current_post.get("post_type", "A"),
+            current_post,  # context dict — contains account metadata
         )
         reward = round(float(reward), 4)
         self._total_reward += reward
@@ -161,6 +172,10 @@ class ContentModerationEnvironment:
             content=post["content"],
             platform=post["platform"],
             context=post.get("context"),
+            # Account-level Trust & Safety metadata — see models.py for field docs
+            author_account_age_days=post.get("author_account_age_days", 365),
+            author_previous_strikes=post.get("author_previous_strikes", 0),
+            user_reports_count=post.get("user_reports_count", 0),
             task_name=self._task_name,
             step=self._step_idx + 1,
             max_steps=len(self._posts),

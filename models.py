@@ -51,14 +51,20 @@ class ContentObservation(BaseModel):
 
     Fields
     ------
-    post_id           : Unique identifier for the post.
-    content           : The full text of the post.
-    platform          : Platform the post appeared on.
-    context           : Additional signal (e.g. report count, account type).
-    task_name         : Which task is active.
-    step              : Current step (1-based).
-    max_steps         : Total posts in this episode.
-    available_actions : The valid action values for this environment.
+    post_id                  : Unique identifier for the post.
+    content                  : The full text of the post.
+    platform                 : Platform the post appeared on.
+    context                  : Additional signal (e.g. report count, account type).
+    author_account_age_days  : Days since the posting account was created.
+                               Very new accounts (<7 days) warrant extra scrutiny.
+    author_previous_strikes  : Number of prior policy violations on this account.
+                               High-strike accounts should shift your thresholds.
+    user_reports_count       : How many users have reported this post.
+                               High report counts are a strong signal — but not conclusive.
+    task_name                : Which task is active.
+    step                     : Current step (1-based).
+    max_steps                : Total posts in this episode.
+    available_actions        : The valid action values for this environment.
     """
     episode_id: str = Field(
         description="Session identifier — pass this back to /step as session_id for concurrency-safe routing."
@@ -67,6 +73,21 @@ class ContentObservation(BaseModel):
     content: str
     platform: str
     context: Optional[str] = None
+    author_account_age_days: int = Field(
+        default=365,
+        ge=0,
+        description="Days since account creation. Very new accounts (<7 days) are higher risk.",
+    )
+    author_previous_strikes: int = Field(
+        default=0,
+        ge=0,
+        description="Prior policy violations on this account. High values should raise your suspicion threshold.",
+    )
+    user_reports_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of user reports on this post. High volumes are a signal but not proof of a violation.",
+    )
     task_name: str
     step: int
     max_steps: int
