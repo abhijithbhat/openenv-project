@@ -26,10 +26,11 @@ VALID_TASKS = list(TASK_DATA.keys())
 AVAILABLE_ACTIONS: list[ActionType] = ["remove", "restrict", "label", "escalate", "allow"]
 
 # Maximum posts per episode regardless of dataset size.
-# Prevents LLM inference timeouts when dataset.json has 100+ posts.
+# Prevents LLM inference timeouts when dataset.json has 200+ posts.
 # Each episode samples a random subset of this size from the full pool,
 # giving infinite replayability without hitting the 20-min hackathon limit.
-MAX_EPISODE_POSTS: int = 20
+# 15 posts × ~30s LLM latency = ~7.5 min safely under the 20-min deadline.
+MAX_EPISODE_POSTS: int = 15
 
 
 class ContentModerationEnvironment:
