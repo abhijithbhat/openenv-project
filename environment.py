@@ -25,6 +25,12 @@ from graders import TASK_DATA, STEP_REWARD_FN
 VALID_TASKS = list(TASK_DATA.keys())
 AVAILABLE_ACTIONS: list[ActionType] = ["remove", "restrict", "label", "escalate", "allow"]
 
+# Maximum posts per episode regardless of dataset size.
+# Prevents LLM inference timeouts when dataset.json has 100+ posts.
+# Each episode samples a random subset of this size from the full pool,
+# giving infinite replayability without hitting the 20-min hackathon limit.
+MAX_EPISODE_POSTS: int = 20
+
 
 class ContentModerationEnvironment:
     """
@@ -77,7 +83,11 @@ class ContentModerationEnvironment:
         # Each call to reset() produces a different episode ordering.
         posts = list(TASK_DATA[task_name])
         random.shuffle(posts)
-        self._posts = posts
+        # Cap episode length to prevent LLM timeout when dataset.json has
+        # 100+ posts. We sample MAX_EPISODE_POSTS from the shuffled pool —
+        # each episode sees a different random subset, giving infinite
+        # replayability without blowing the 20-min hackathon time limit.
+        self._posts = posts[:MAX_EPISODE_POSTS]
         self._step_idx = 0
         self._total_reward = 0.0
         self._started = True
