@@ -98,6 +98,33 @@ def _prune_old_sessions() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Content Moderation Environment starting up.")
+    # ── Auto-generate dataset.json on first boot ───────────────────────────
+    # When running on HuggingFace Spaces, HF_TOKEN is already set as a Secret.
+    # If dataset.json doesn't exist yet, kick off the generator as a background
+    # subprocess so the server starts immediately without blocking.
+    import os, subprocess, sys
+    from pathlib import Path
+    dataset_path = Path(__file__).parent / os.getenv("DATASET_FILE", "dataset.json")
+    hf_token = os.getenv("HF_TOKEN")
+    if not dataset_path.exists() and hf_token:
+        logger.info(
+            "dataset.json not found. HF_TOKEN is set — launching generate_dataset.py "
+            "in the background. Server is live; dataset will load on next restart."
+        )
+        try:
+            subprocess.Popen(
+                [sys.executable, str(Path(__file__).parent / "generate_dataset.py")],
+                env={**os.environ, "HF_TOKEN": hf_token},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:
+            logger.warning("Could not launch dataset generator: %s", exc)
+    elif dataset_path.exists():
+        logger.info("dataset.json found — using generated dataset (%s).", dataset_path)
+    else:
+        logger.info("No HF_TOKEN set and no dataset.json — using 48 built-in curated posts.")
+    # ── Server ready ───────────────────────────────────────────────────────
     yield
     logger.info("Content Moderation Environment shutting down.")
     active_sessions.clear()
