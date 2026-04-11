@@ -40,52 +40,80 @@ MAX_TOKENS: int = 20       # we only need one word
 TASK_NAMES = ["easy_moderation", "medium_moderation", "hard_moderation"]
 VALID_ACTIONS = ["remove", "restrict", "label", "escalate", "allow"]
 
-SYSTEM_PROMPT = """You are a content moderation expert for a major social media platform.
-Your job is to review posts and decide on the appropriate enforcement action.
+SYSTEM_PROMPT = """You are a senior content moderation expert at a major social media platform.
+
+You must reason through each post using three steps:
+
+STEP 1 — CLASSIFY: What type of content is this?
+  (hate speech / coded hate / doxxing / threat / misinformation / scam / satire / testimony / credible data / neutral)
+
+STEP 2 — ASSESS ASYMMETRY: Which error is worse in this specific case?
+  - If Type A (critical violation): letting it through (false negative) = catastrophic. Remove or escalate.
+  - If Type B (legitimate speech): removing it (false positive) = silencing a real voice. Allow or label.
+
+STEP 3 — DECIDE: Choose the single best enforcement action.
 
 Actions:
-- remove   : Take the post down completely. Use for clear violations (hate speech, threats, dangerous misinformation, spam).
-- restrict : Reduce the post's distribution or add an age gate. Use for borderline or graphic content.
-- label    : Add a warning or context label. Use for content that is misleading but not outright harmful.
-- escalate : Send to a human reviewer. Use when you are genuinely unsure.
-- allow    : No action needed. Content is within policy.
+- remove   : Clear violation — hate speech, threats, dangerous misinformation, doxxing, scams.
+- restrict : Borderline graphic content — reduce distribution or age-gate.
+- label    : Add context warning — misleading but not outright harmful.
+- escalate : Genuinely ambiguous — send to a human reviewer.
+- allow    : Within policy — satire, personal opinion, testimony, credible sources.
 
-IMPORTANT GUIDELINES:
-- Satire, comedy, and opinion — even if harsh — are generally allowed.
-- Personal testimony of discrimination or hardship should almost always be allowed.
-- Coded or disguised hate speech (using euphemisms, 'just asking questions') should be removed.
-- Accurate information from credible sources should be allowed, even if it sounds alarming.
-- Veiled threats — especially involving real locations — should be removed immediately.
-- Content glorifying or rehabilitating extremist ideologies must be removed.
+CRITICAL RULES:
+- Coded / disguised hate speech ('just asking questions', dog whistles) → remove
+- Personal testimony of discrimination or hardship → almost always allow
+- Accurate data from credible sources, even if alarming → allow
+- Veiled threats referencing real locations or real named people → remove immediately
+- Satire from verified comedy accounts → allow
+- Research ABOUT extremism is not the same as promoting it → allow
+- Suicide risk signals masked as poetry or fiction → escalate immediately
+- Coordinated inauthentic behaviour (same post, 1000s of accounts) → remove
 
-Respond with ONLY one word: remove, restrict, label, escalate, or allow."""
+Format your response EXACTLY as two lines:
+REASONING: [one concise sentence explaining your decision]
+DECISION: [one word: remove/restrict/label/escalate/allow]"""
 
 
 # ---------------------------------------------------------------------------
 # Agent helpers
 # ---------------------------------------------------------------------------
 
-def extract_action(text: str) -> str:
-    """Extract a valid action word from the model's response."""
-    clean = text.strip().lower().split()[0] if text.strip() else ""
-    clean = clean.rstrip(".,!?;:")
-    if clean in VALID_ACTIONS:
-        return clean
+def extract_action(text: str) -> tuple[str, str]:
+    """
+    Parse a CoT response and return (action, reasoning).
+
+    Expected format:
+        REASONING: <one sentence>
+        DECISION: <one word>
+    Falls back to scanning the full text for any valid action word.
+    """
+    reasoning = ""
+    decision = ""
+    for line in text.strip().split("\n"):
+        stripped = line.strip()
+        if stripped.upper().startswith("REASONING:"):
+            reasoning = stripped[len("REASONING:"):].strip()
+        elif stripped.upper().startswith("DECISION:"):
+            decision = stripped[len("DECISION:"):].strip().lower().rstrip(".,!?;:")
+    if decision in VALID_ACTIONS:
+        return decision, reasoning
+    # Fallback: scan full text for any valid action word
     for action in VALID_ACTIONS:
         if action in text.lower():
-            return action
-    return "escalate"  # Safe fallback
+            return action, reasoning
+    return "escalate", reasoning  # Safe default
 
 
 def get_agent_action(client: OpenAI, post_content: str,
-                     platform: str, context: str | None) -> str:
-    """Ask the LLM to moderate a post and return a valid action."""
+                     platform: str, context: str | None) -> tuple[str, str]:
+    """Ask the LLM to moderate a post and return (action, reasoning)."""
     context_str = f"\nAdditional context: {context}" if context else ""
     user_message = (
         f"Platform: {platform}\n"
         f"Post content:\n\"\"\"\n{post_content}\n\"\"\""
         f"{context_str}\n\n"
-        "What is your enforcement decision?"
+        "Apply your three-step analysis and provide your REASONING and DECISION."
     )
     try:
         response = client.chat.completions.create(
@@ -95,13 +123,13 @@ def get_agent_action(client: OpenAI, post_content: str,
                 {"role": "user", "content": user_message},
             ],
             temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
+            max_tokens=80,   # enough for REASONING + DECISION lines
         )
         raw = response.choices[0].message.content or ""
         return extract_action(raw)
     except Exception as exc:
         print(f"    [LLM error] {exc} — defaulting to escalate")
-        return "escalate"
+        return "escalate", ""
 
 
 # ---------------------------------------------------------------------------
@@ -144,13 +172,14 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         platform = obs.get("platform", "unknown")
         context = obs.get("context")
 
-        action_str = get_agent_action(client, post_content, platform, context)
+        action_str, reasoning = get_agent_action(client, post_content, platform, context)
 
         # Pass session_id so the server routes this step to our session
+        # Also pass reasoning so the server can log it
         result = http_post("/step", {
             "action": action_str,
             "confidence": None,
-            "reasoning": None,
+            "reasoning": reasoning[:500] if reasoning else None,
             "session_id": session_id,
         })
 
@@ -159,8 +188,14 @@ def run_episode(client: OpenAI, task_name: str) -> float:
         info = result.get("info", {})
         total_reward += reward
 
-        # Required structured log: STEP
-        print(f"[STEP] step={step} action={action_str} reward={reward:.4f} correct={info.get('correct_action', 'unknown')}", flush=True)
+        # Required structured log: STEP (includes agent reasoning for transparency)
+        reasoning_short = reasoning[:100].replace('"', "'") if reasoning else "(no reasoning)"
+        print(
+            f"[STEP] step={step} action={action_str} reward={reward:.4f} "
+            f"correct={info.get('correct_action', 'unknown')} "
+            f'reasoning="{reasoning_short}"',
+            flush=True,
+        )
 
         if done:
             break

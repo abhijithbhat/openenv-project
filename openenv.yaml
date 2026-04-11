@@ -61,7 +61,7 @@ tasks:
       enforcement action. Binary scoring: 1.0 for correct, 0.0 for wrong.
       Designed to establish a performance baseline for the agent.
     difficulty: easy
-    max_steps: 8
+    max_steps: 16
     reward_range: [0.0, 1.0]
     grader: programmatic
 
@@ -83,8 +83,9 @@ tasks:
         Type A (critical violation): allowing through = 0.0 (catastrophic).
         Type B (safe content): removing = 0.05 (silencing legitimate speech).
       Escalating is always partially valid. Tests handling of coded hate speech,
-      satire-vs-hate-speech, veiled threats, and accurate-but-alarming information.
+      satire-vs-hate-speech, veiled threats, doxxing, coordinated disinfo,
+      suicide-risk signals, and accurate-but-alarming information.
     difficulty: hard
-    max_steps: 8
+    max_steps: 16
     reward_range: [0.0, 1.0]
     grader: programmatic

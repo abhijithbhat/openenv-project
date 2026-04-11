@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 # never share state.
 active_sessions: Dict[str, ContentModerationEnvironment] = {}
 
+# In-memory leaderboard — persists for the lifetime of the server process.
+# Agents can submit their scores via POST /submit_score and rank themselves.
+_leaderboard: list = []
+
 # Fallback singleton for clients that don't pass session_id (backward compat)
 _default_env = ContentModerationEnvironment()
 
@@ -346,12 +350,17 @@ async def baseline():
 @app.get(
     "/metadata",
     summary="Environment metadata",
-    description="Returns the environment name and description. Required by the OpenEnv runtime validator.",
+    description="Returns the environment name, innovation tagline, and description. Required by the OpenEnv runtime validator.",
 )
 async def env_metadata():
     """Self-describing metadata endpoint — required by openenv-core runtime validator."""
     return {
-        "name": "Content Moderation OpenEnv",
+        "name": "ContentGuard — Content Moderation OpenEnv",
+        "tagline": (
+            "The first OpenEnv benchmark where which type of mistake you make "
+            "matters as much as whether you make a mistake at all."
+        ),
+        "innovation": "asymmetric_severity_weighted_reward",
         "description": (
             "A social media content moderation environment where an AI agent reviews "
             "flagged posts and decides the appropriate enforcement action "
@@ -361,6 +370,15 @@ async def env_metadata():
             "removing satire scores 0.05. Escalating to a human reviewer always "
             "earns partial credit on genuinely ambiguous content."
         ),
+        "tasks": 3,
+        "posts_per_task": 16,
+        "total_posts": 48,
+        "post_types": [
+            "Type A — critical violations (coded hate speech, veiled threats, radicalisation, doxxing)",
+            "Type B — legitimate speech that superficially looks dangerous (satire, testimony, cited research)",
+        ],
+        "reward_range": [0.0, 1.0],
+        "action_space": ["remove", "restrict", "label", "escalate", "allow"],
     }
 
 
@@ -411,6 +429,117 @@ async def mcp(request: Request):
                 {"name": "tasks",  "description": "List all available tasks and their difficulty levels"},
                 {"name": "grader", "description": "Get the asymmetric reward rubric documentation"},
             ],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Routes — Leaderboard & Reward Matrix
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/submit_score",
+    summary="Submit agent scores to the leaderboard",
+    description=(
+        "Submit your episode scores across all three tasks to the in-session leaderboard. "
+        "Agents are ranked by average score. Leaderboard resets on server restart."
+    ),
+)
+async def submit_score(
+    agent_name: str = Query(..., description="Name or identifier for your agent"),
+    model: str = Query(default="unknown", description="Model used, e.g. meta-llama/Meta-Llama-3-8B-Instruct"),
+    easy: float = Query(default=0.0, ge=0.0, le=1.0, description="Score on easy_moderation task"),
+    medium: float = Query(default=0.0, ge=0.0, le=1.0, description="Score on medium_moderation task"),
+    hard: float = Query(default=0.0, ge=0.0, le=1.0, description="Score on hard_moderation task"),
+):
+    """Submit scores to the in-session leaderboard and receive your rank."""
+    avg = round((easy + medium + hard) / 3, 4)
+    entry = {
+        "agent": agent_name,
+        "model": model,
+        "scores": {"easy_moderation": easy, "medium_moderation": medium, "hard_moderation": hard},
+        "average": avg,
+        "submitted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _leaderboard.append(entry)
+    _leaderboard.sort(key=lambda x: x["average"], reverse=True)
+    rank = next(
+        (i + 1 for i, e in enumerate(_leaderboard) if e["submitted_at"] == entry["submitted_at"] and e["agent"] == agent_name),
+        len(_leaderboard),
+    )
+    logger.info("Leaderboard submission | agent=%s | model=%s | avg=%.4f | rank=%d", agent_name, model, avg, rank)
+    return {"rank": rank, "average": avg, "total_submissions": len(_leaderboard), "entry": entry}
+
+
+@app.get(
+    "/leaderboard",
+    summary="Agent leaderboard — top scores across all tasks",
+    description=(
+        "Returns the top-20 agents ranked by average score across all three tasks. "
+        "Submit scores via POST /submit_score. Leaderboard resets on server restart."
+    ),
+)
+async def get_leaderboard():
+    """Returns the top-20 agents ranked by average score."""
+    return {
+        "leaderboard": _leaderboard[:20],
+        "total_submissions": len(_leaderboard),
+        "ranked_by": "average score across easy_moderation, medium_moderation, hard_moderation",
+        "note": "Leaderboard is in-session only — it resets on server restart. Submit via POST /submit_score.",
+    }
+
+
+@app.get(
+    "/reward_matrix",
+    summary="Visual reward matrix — understand the asymmetric scoring in one glance",
+    description=(
+        "Returns a human-readable reward matrix for all task/action/post-type combinations. "
+        "This is the fastest way to understand ContentGuard's core innovation without reading source code."
+    ),
+)
+async def reward_matrix():
+    """The fastest way to understand ContentGuard's asymmetric reward innovation."""
+    return {
+        "description": (
+            "ContentGuard uses an asymmetric, severity-weighted reward function. "
+            "The cost of each mistake depends on the TYPE of post, not just whether a mistake was made."
+        ),
+        "core_insight": (
+            "Which type of mistake you make matters as much as whether you make a mistake. "
+            "Missing hate speech is NOT equally bad as removing a joke."
+        ),
+        "easy_moderation": {
+            "scoring": "Binary — 1.0 for correct action, 0.0 for any wrong action.",
+            "rationale": "Easy posts are unambiguous. No partial credit needed.",
+        },
+        "medium_moderation": {
+            "primary_correct": {"score": 1.0, "meaning": "Best possible action"},
+            "secondary_valid": {"score": 0.5, "meaning": "Acceptable fallback action"},
+            "escalate_any": {"score": 0.3, "meaning": "Always partially valid — human reviewer can resolve it"},
+            "wrong": {"score": 0.0, "meaning": "Incorrect action"},
+            "rationale": "Most posts have one best and one acceptable action.",
+        },
+        "hard_moderation": {
+            "type_A_posts": {
+                "description": "Coded hate speech, veiled threats, radicalisation content, doxxing, coordinated disinfo",
+                "remove":   {"score": 1.0,  "meaning": "✅ CORRECT — critical violation removed"},
+                "escalate": {"score": 0.55, "meaning": "🔶 Correct instinct — human reviewer will catch it"},
+                "restrict": {"score": 0.25, "meaning": "🟡 Partial enforcement only — harm partially contained"},
+                "label":    {"score": 0.15, "meaning": "🟡 Insufficient for critical content"},
+                "allow":    {"score": 0.0,  "meaning": "🔴 CATASTROPHIC — harm passes through unchecked"},
+            },
+            "type_B_posts": {
+                "description": "Satire, personal testimony, cited peer-reviewed research, journalism about extremism",
+                "allow":    {"score": 1.0,  "meaning": "✅ CORRECT — legitimate speech preserved"},
+                "label":    {"score": 0.55, "meaning": "🔶 Unnecessary label, but otherwise harmless"},
+                "escalate": {"score": 0.45, "meaning": "🔶 Overcautious — a human reviewer will clear it"},
+                "restrict": {"score": 0.2,  "meaning": "🟡 Suppressing legitimate speech"},
+                "remove":   {"score": 0.05, "meaning": "🔴 SILENCING — a legitimate voice is wrongly censored"},
+            },
+            "key_insight": (
+                "An agent that scores high on hard tasks has learned WHICH type of mistake is worse — "
+                "not just whether to make a mistake. This is the metric that separates good moderation from great moderation."
+            ),
         },
     }
 

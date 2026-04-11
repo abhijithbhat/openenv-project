@@ -1,7 +1,13 @@
+# Core web framework — required by app.py (the FastAPI environment server)
 fastapi==0.135.2
 uvicorn==0.42.0
 pydantic==2.12.5
+python-multipart==0.0.22
+
+# LLM + HTTP clients — required by inference.py (the baseline agent runner)
+# Not needed for running the environment server itself
 openai==2.30.0
 requests==2.33.1
-python-multipart==0.0.22
+
+# OpenEnv framework — required for openenv validate and runtime compatibility
 openenv-core==0.2.3
