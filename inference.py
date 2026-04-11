@@ -38,7 +38,8 @@ _MODEL_NAMES_RAW: str = os.getenv(
 )
 MODEL_NAMES: list[str] = [m.strip() for m in _MODEL_NAMES_RAW.split(",") if m.strip()]
 
-HF_TOKEN: str = os.getenv("HF_TOKEN")           # No default — must be set explicitly
+# Accept either HF_TOKEN or OPENAI_API_KEY to satisfy all evaluator environments
+HF_TOKEN: str = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
 LOCAL_IMAGE_NAME: str = os.getenv("LOCAL_IMAGE_NAME")  # Optional
 ENV_SERVER_URL: str = os.getenv("ENV_SERVER_URL", "http://localhost:7860")
 TEMPERATURE: float = 0.0   # deterministic for reproducibility
@@ -229,8 +230,7 @@ def run_episode(client: OpenAI, task_name: str,
 
 def main() -> None:
     if not HF_TOKEN:
-        print("ERROR: HF_TOKEN environment variable not set.")
-        print("Run: export HF_TOKEN=hf_xxxx")
+        print("ERROR: API key not set. Please set HF_TOKEN or OPENAI_API_KEY.")
         sys.exit(1)
 
     try:
