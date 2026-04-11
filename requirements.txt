@@ -8,6 +8,7 @@ python-multipart==0.0.22
 # Not needed for running the environment server itself
 openai==2.30.0
 requests==2.33.1
+tabulate==0.9.0
 
 # OpenEnv framework — required for openenv validate and runtime compatibility
 openenv-core==0.2.3
