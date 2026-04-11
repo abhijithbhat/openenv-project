@@ -260,11 +260,6 @@ def main() -> None:
         print(f"{'='*60}")
 
         client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
-        # Monkey-patch the model into get_agent_action via a closure
-        _orig_get = get_agent_action
-
-        def _get_action_for_model(content, platform, context, _model=model_id, _client=client):
-            return get_agent_action(_client, content, platform, context)
 
         model_scores: dict[str, float] = {}
         for task in TASK_NAMES:
@@ -274,18 +269,6 @@ def main() -> None:
         avg = round(sum(model_scores.values()) / len(model_scores), 4)
         row = {"model": model_id, **model_scores, "average": avg}
         all_results.append(row)
-
-        # Also submit to the server leaderboard
-        try:
-            http_post_form("/submit_score", {
-                "agent_name": model_id.split("/")[-1],  # short name
-                "model": model_id,
-                "easy": model_scores.get("easy_moderation", 0.0),
-                "medium": model_scores.get("medium_moderation", 0.0),
-                "hard": model_scores.get("hard_moderation", 0.0),
-            })
-        except Exception:
-            pass  # Non-fatal — leaderboard submission is best-effort
 
     # -----------------------------------------------------------------------
     # Print the final leaderboard table
@@ -314,16 +297,6 @@ def main() -> None:
     print(f"  Adversarial task: measures prompt injection resistance.")
     print(f"  Hard task:        measures asymmetric context-aware moderation.")
     print("=" * 72)
-
-
-def http_post_form(path: str, params: dict) -> dict:
-    """POST with query parameters (for /submit_score)."""
-    try:
-        url = ENV_SERVER_URL.rstrip("/") + path
-        resp = requests.post(url, params=params, timeout=10)
-        return resp.json()
-    except Exception:
-        return {}
 
 
 if __name__ == "__main__":
