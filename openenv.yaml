@@ -11,7 +11,7 @@ description: >
 
 app:
   type: fastapi
-  module: app
+  module: server
   instance: app
   port: 7860
 
